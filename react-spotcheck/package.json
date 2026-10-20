@@ -1,0 +1,57 @@
+{
+  "name": "react-spotcheck",
+  "version": "0.1.0",
+  "description": "Dev-only overlay that shows how a React page is built (spacing, grid, type, colour) and flags where it drifts from its own design system or tokens.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lary-thmetic/skatepark.git",
+    "directory": "react-spotcheck"
+  },
+  "homepage": "https://github.com/lary-thmetic/skatepark/tree/main/react-spotcheck#readme",
+  "bugs": "https://github.com/lary-thmetic/skatepark/issues",
+  "type": "module",
+  "sideEffects": false,
+  "keywords": [
+    "react",
+    "design-system",
+    "design-tokens",
+    "overlay",
+    "devtools",
+    "spacing",
+    "grid",
+    "audit"
+  ],
+  "files": [
+    "dist",
+    "index.d.ts",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "types": "./index.d.ts",
+  "main": "./dist/index.js",
+  "unpkg": "./dist/react-spotcheck.global.js",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "production": "./dist/noop.js",
+      "development": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./global": "./dist/react-spotcheck.global.js",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "scripts": {
+    "extract": "python3 scripts/extract.py prototype/react-spotcheck.html",
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node test/build-pages.mjs && node test/run.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "playwright": "^1.48.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

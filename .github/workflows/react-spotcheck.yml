@@ -1,0 +1,22 @@
+name: react-spotcheck
+on:
+  push:
+    paths: ['react-spotcheck/**', '.github/workflows/react-spotcheck.yml']
+  pull_request:
+    paths: ['react-spotcheck/**', '.github/workflows/react-spotcheck.yml']
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: react-spotcheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: react-spotcheck/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test

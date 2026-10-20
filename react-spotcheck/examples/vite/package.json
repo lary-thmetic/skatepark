@@ -1,0 +1,4 @@
+{ "name": "spotcheck-vite-example", "private": true, "type": "module",
+  "scripts": { "dev": "vite", "build": "vite build" },
+  "dependencies": { "react": "^19.0.0", "react-dom": "^19.0.0", "react-spotcheck": "file:../.." },
+  "devDependencies": { "vite": "^6.0.0", "@vitejs/plugin-react": "^4.3.0" } }

@@ -1,0 +1,5 @@
+node_modules
+examples/*/node_modules
+examples/*/dist
+test/shots
+test/pages/strict.bundle.js

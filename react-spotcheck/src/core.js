@@ -1,0 +1,1303 @@
+/*! react-spotcheck · generated from the prototype by scripts/extract.py; edit the prototype, not this file. */
+/* Lucide icons: ISC, Copyright (c) 2026 Lucide Icons and Contributors; Feather-derived icons: MIT, Copyright (c) 2013-present Cole Bemis. See THIRD_PARTY_NOTICES.md. */
+const MODS = { alt: 'altKey', option: 'altKey', shift: 'shiftKey', ctrl: 'ctrlKey', control: 'ctrlKey', meta: 'metaKey', cmd: 'metaKey' };
+/* Matched on the physical key (KeyG), not the typed character: Option+Shift+G types "˝" on macOS. */
+export function parseHotkey(str) {
+  const parts = String(str).toLowerCase().split('+').map(s => s.trim()).filter(Boolean);
+  const key = parts.pop() || 'g', mods = new Set(parts.map(p => MODS[p]).filter(Boolean));
+  const code = /^[a-z]$/.test(key) ? 'Key' + key.toUpperCase() : /^[0-9]$/.test(key) ? 'Digit' + key : key;
+  return e => e.code === code && ['altKey', 'shiftKey', 'ctrlKey', 'metaKey'].every(m => !!e[m] === mods.has(m));
+}
+
+let current = null;
+const NOOP = Object.freeze({ destroy() {}, issues: () => [], system: () => null, rescan() {} });
+
+/** Mounts the overlay once per page. Calling it again returns the live instance. */
+export function init(opts = {}) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return NOOP;
+  if (current) return current;
+  const ac = new AbortController(), signal = ac.signal, observers = [];
+  const track = o => (observers.push(o), o);
+  let dead = false;
+
+  const APP = opts.root || document.body;
+  const KEY = 'react-spotcheck:' + location.pathname;
+  const HK = parseHotkey(opts.hotkey || 'alt+shift+g');
+  const store = {
+    get() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } },
+    set(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } }
+  };
+  const saved = store.get();
+  const S = {
+    active: false,
+    layers: Object.assign({ grid: true, spacing: false, type: false, colour: false, audit: false }, saved.layers || {}),
+    panel: false, pins: [], hover: null,
+    ignored: new Set(saved.ignored || []),
+    adjust: saved.adjust || {},
+    edge: saved.edge || 'right', ratio: saved.ratio != null ? saved.ratio : (saved.edge === 'bottom' ? 0.84 : 0.5),
+    recs: [], inf: null, issues: [], alt: false, focusKey: null, focused: new Set(), selectedKey: null
+  };
+  const persist = () => store.set({ layers: S.layers, ignored: [...S.ignored], adjust: S.adjust, edge: S.edge, ratio: S.ratio, collapsed: !S.active });
+
+  /* ---------- Shadow DOM host ---------- */
+  const host = document.createElement('div');
+  host.id = 'react-spotcheck-root';
+  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;direction:ltr;unicode-bidi:isolate;';
+  host.setAttribute('dir', 'ltr'); /* the tool's UI never mirrors with the page */
+  document.documentElement.appendChild(host);
+  const root = host.attachShadow({ mode: 'open' });
+  root.innerHTML = `<style>
+  :host{direction:ltr;--sc-blue:#3b82f6;--sc-blue-fill:rgba(59,130,246,.07);--sc-pink:#ec4899;--sc-pink-fill:rgba(236,72,153,.13);
+    --sc-cyan:#06b6d4;--sc-cyan-fill:rgba(6,182,212,.06);--sc-amber:#f59e0b;--sc-on-accent:#ffffff;--sc-on-amber:#231600;--sc-pink-text:#be185d;--sc-pink-solid:#be185d;--sc-on-pink:#ffffff;
+    /* Chrome (toolbar, panel, tags, tooltips) is inverted against the page theme so the tool never blends into the composition:
+       a light page gets dark chrome, a dark page gets light chrome. Lines drawn on the page stay keyed to the page theme. */
+    --sc-tag-bg:#161616;--sc-tag-fg:#ededed;--sc-tag-quiet:#a1a1a1;--sc-line:#9aa0ad;--sc-bar-bg:#161616;--sc-hover:#ffffff1a;
+    --sc-shadow:0 0 0 1px #ffffff12,0 1px 2px #0000001f,0 4px 14px #00000029;
+    --sc-mono:"Geist Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;--sc-sans:"Geist",ui-sans-serif,system-ui,-apple-system,sans-serif;
+    --sc-ease-drawer:cubic-bezier(.32,.72,0,1);--sc-ease-spring:cubic-bezier(.34,1.56,.64,1);
+    --sc-panel-bg:#161616;--sc-text-1:#ffffff;--sc-text-2:#a7a7a7;--sc-surface-hover:#ffffff1a;--sc-surface-active:#ffffff26;--sc-border-subtle:#ffffff1a;
+    --sc-panel-shadow:0 2px 12px #00000038,0 0 0 1px #ffffff12;
+    --sc-err:#f87171;--sc-err-bg:#3d1515;--sc-ok:#4ade80;}
+  :host(.dark){--sc-pink-text:#f472b6;--sc-pink-solid:#f472b6;--sc-on-pink:#2a0717;--sc-blue:#60a5fa;--sc-blue-fill:rgba(96,165,250,.08);--sc-pink:#f472b6;--sc-pink-fill:rgba(244,114,182,.14);
+    --sc-cyan:#22d3ee;--sc-cyan-fill:rgba(34,211,238,.05);--sc-tag-bg:#ffffff;--sc-tag-fg:#171717;--sc-tag-quiet:#6b6b6b;
+    --sc-line:#646d80;--sc-bar-bg:#ffffff;--sc-hover:#0000000d;--sc-shadow:0 0 0 1px #0000000f,0 1px 2px #00000033,0 6px 18px #00000059;
+    --sc-panel-bg:#ffffff;--sc-text-1:#171717;--sc-text-2:#6b6b6b;--sc-surface-hover:#0000000d;--sc-surface-active:#00000014;--sc-border-subtle:#00000014;
+    --sc-panel-shadow:0 2px 12px #00000059,0 0 0 1px #0000000f;
+    --sc-err:#b91c1c;--sc-err-bg:#fee2e2;--sc-ok:#15803d;}
+  *{box-sizing:border-box}
+  .nw{white-space:nowrap}.lbtn,.errc,.disc{white-space:nowrap}[hidden]{display:none!important}
+  .layer{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+  .col{position:absolute;top:0;bottom:0;background:var(--sc-cyan-fill);border-left:1px solid color-mix(in oklab,var(--sc-cyan) 40%,transparent);border-right:1px solid color-mix(in oklab,var(--sc-cyan) 40%,transparent)}
+  .base{position:absolute;inset:0;background-image:linear-gradient(to bottom,transparent calc(100% - 1px),color-mix(in oklab,var(--sc-cyan) 11%,transparent) 0)}
+  .tag{position:absolute;display:flex;align-items:center;gap:6px;font:500 12px/1.33 var(--sc-mono);padding:4px 7px;border-radius:8px;background:var(--sc-tag-bg);color:var(--sc-tag-fg);box-shadow:var(--sc-shadow);white-space:nowrap}
+  .tag.sm{font-size:12px;line-height:1.25;padding:3px 6px;border-radius:6px}
+  .q{color:var(--sc-tag-quiet)}
+  .sw{width:10px;height:10px;border-radius:3px;flex:none;box-shadow:inset 0 0 0 1px rgba(127,127,127,.4)}
+  .band{position:absolute;background:var(--sc-pink-fill)}
+  .band.x{border-left:1px solid var(--sc-pink);border-right:1px solid var(--sc-pink)}
+  .band.y{border-top:1px solid var(--sc-pink);border-bottom:1px solid var(--sc-pink)}
+  .band.m{background:repeating-linear-gradient(45deg,var(--sc-pink-fill) 0 3px,transparent 3px 7px)}
+  .bl{position:absolute;transform:translate(-50%,-50%);font:500 12px/1.2 var(--sc-mono);color:var(--sc-pink-text);white-space:nowrap}
+  .frame{position:absolute;border:1px solid var(--sc-blue);background:var(--sc-blue-fill)}
+  .frame.pin{border-width:1.5px;background:none}
+  .hd{position:absolute;width:7px;height:7px;background:var(--sc-tag-bg);border:1px solid var(--sc-blue)}
+  .region{position:absolute;border:1px dashed var(--sc-line);border-radius:6px}
+  .gl{position:absolute;height:0;border-top:1px solid var(--sc-cyan)}
+  .gl.x{border-top-style:solid;opacity:.7}
+  .br{position:absolute;border:1px dashed var(--sc-line)}
+  .br.b{border-top:0}.br.r{border-left:0}.br.l{border-right:0}.br.t{border-bottom:0}
+  .ld{position:absolute;border-left:1px dashed var(--sc-line)}
+  .ld.h{border-left:0;border-top:1px dashed var(--sc-line)}
+  .ring{position:absolute;width:9px;height:9px;border-radius:50%;background:var(--sc-line);display:grid;place-items:center}
+  .ring::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--sc-tag-bg)}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--sc-amber);flex:none}
+  .tag.issue{pointer-events:auto}
+  .no{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--sc-tag-fg);color:var(--sc-tag-bg);font-size:12px;line-height:1;font-weight:600;font-variant-numeric:tabular-nums}
+  .tag.issue.on{box-shadow:0 0 0 1.5px var(--sc-blue),var(--sc-shadow)}
+  .frame.quiet{background:none}
+  .vline{position:absolute;top:0;bottom:0;width:0;border-left:1px solid var(--sc-cyan)}
+  .cat{display:inline-flex;align-items:center;gap:5px;padding:1px 6px 1px 5px;border-radius:5px;background:var(--sc-hover);color:var(--sc-tag-fg);font-size:12px;line-height:1.33;font-weight:500;letter-spacing:0;text-transform:none}
+  .cat .lk{opacity:1;width:7px;height:7px}
+  .ign{pointer-events:auto;font:inherit;color:var(--sc-tag-quiet);background:none;border:0;border-left:1px solid color-mix(in oklab,var(--sc-tag-quiet) 35%,transparent);padding:0 0 0 7px;margin-left:1px;cursor:pointer}
+  .ms{position:absolute;background:var(--sc-pink)}
+  .ml{position:absolute;transform:translate(-50%,-50%);font:500 12px/1.2 var(--sc-mono);padding:2px 5px;border-radius:5px;background:var(--sc-pink-solid);color:var(--sc-on-pink);white-space:nowrap}
+  .vp{top:calc(8px + env(safe-area-inset-top,0px));right:calc(8px + env(safe-area-inset-right,0px))}
+  button{font:inherit;cursor:pointer}
+  .bar{position:absolute;left:0;top:0;pointer-events:auto;display:flex;align-items:center;padding:6px 8px;border-radius:13px;background:var(--sc-panel-bg);box-shadow:var(--sc-panel-shadow);color:var(--sc-text-1);font:500 13px/1.23 var(--sc-sans);-webkit-font-smoothing:antialiased;user-select:none;touch-action:none;cursor:grab;transition:left .22s var(--sc-ease-drawer),top .22s var(--sc-ease-drawer),padding .22s var(--sc-ease-drawer),border-radius .22s var(--sc-ease-drawer)}
+  .bar[data-edge=left],.bar[data-edge=right]{flex-direction:column;padding:8px 6px}
+  .bar.dragging,.bar.dragging *{transition:none!important;cursor:grabbing}
+  .bar.dragging .tip{display:none}
+  .bar.measure{visibility:hidden;left:0!important;top:0!important}
+  .bar.measure,.bar.measure *{transition:none!important;animation:none!important}
+  .drawer{display:grid;grid-template-columns:1fr;margin-right:4px;transition:grid-template-columns .22s var(--sc-ease-drawer),margin .22s var(--sc-ease-drawer)}
+  .bar[data-edge=left] .drawer,.bar[data-edge=right] .drawer{grid-template-columns:none;grid-template-rows:1fr;margin:0 0 4px;transition:grid-template-rows .22s var(--sc-ease-drawer),margin .22s var(--sc-ease-drawer)}
+  .dclip{min-width:0;min-height:0;display:flex;max-height:28px;transition:max-height .22s var(--sc-ease-drawer),max-width .22s var(--sc-ease-drawer)}
+  .bar[data-edge=left] .dclip,.bar[data-edge=right] .dclip{max-height:none;max-width:28px}
+  .bar[data-collapsed=true] .dclip{max-height:0;transition-duration:.14s}
+  .bar[data-collapsed=true][data-edge=left] .dclip,.bar[data-collapsed=true][data-edge=right] .dclip{max-height:none;max-width:0}
+  .bar[data-collapsed=true] .chev{width:22px;height:16px}
+  .bar[data-collapsed=true][data-edge=left] .chev,.bar[data-collapsed=true][data-edge=right] .chev{width:16px;height:22px}
+  .acts{display:flex;align-items:center;gap:2px;min-width:0;opacity:1;transition:opacity .18s var(--sc-ease-drawer) .08s}
+  .bar[data-edge=left] .acts,.bar[data-edge=right] .acts{flex-direction:column;min-height:0}
+  .bar[data-collapsed=true]{transition-duration:.14s}
+  .bar[data-collapsed=true] .drawer{grid-template-columns:0fr;margin:0;transition-duration:.14s}
+  .bar[data-collapsed=true][data-edge=left] .drawer,.bar[data-collapsed=true][data-edge=right] .drawer{grid-template-rows:0fr}
+  .bar[data-collapsed=true] .acts{opacity:0;pointer-events:none;transition:opacity .1s var(--sc-ease-drawer)}
+  .bar[data-collapsed=true][data-edge=bottom]{padding:1px 6px;border-radius:10px 10px 0 0}
+  .bar[data-collapsed=true][data-edge=top]{padding:1px 6px;border-radius:0 0 10px 10px}
+  .bar[data-collapsed=true][data-edge=left]{padding:6px 1px;border-radius:0 10px 10px 0}
+  .bar[data-collapsed=true][data-edge=right]{padding:6px 1px;border-radius:10px 0 0 10px}
+  .bw{position:relative;display:flex}
+  .ib{position:relative;display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:8px;background:none;color:var(--sc-text-2);cursor:pointer;transition:transform .4s var(--sc-ease-spring),background-color .15s,color .15s}
+  .ib[aria-pressed="true"]{color:var(--sc-text-1);background:var(--sc-surface-active)}
+  .ib svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+  .chev{width:22px;height:22px}
+  .chev svg{width:18px;height:18px;transition:transform .22s var(--sc-ease-drawer),color .15s}
+  .bar[data-collapsed=true] .chev svg{transition-duration:.14s}
+  .div{flex:none;width:1px;height:16px;margin:0 4px;background:var(--sc-border-subtle)}
+  .bar[data-edge=left] .div,.bar[data-edge=right] .div{width:16px;height:1px;margin:4px 0}
+  .badge{position:absolute;top:0;right:-2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--sc-err);color:var(--sc-panel-bg);font:600 9px/1.56 var(--sc-sans);text-align:center;font-variant-numeric:tabular-nums}
+  .tip{position:absolute;z-index:2;pointer-events:none;visibility:hidden;white-space:nowrap;padding:4px 8px;border-radius:8px;background:var(--sc-panel-bg);color:var(--sc-text-1);box-shadow:var(--sc-panel-shadow);font:500 12px/1.33 var(--sc-sans)}
+  .bw:has(:focus-visible) .tip{visibility:visible;animation:sc-tip .1s ease-out}
+  .tip[data-side=top]{bottom:calc(100% + 10px);left:50%;translate:-50% 0}
+  .tip[data-side=bottom]{top:calc(100% + 10px);left:50%;translate:-50% 0}
+  .tip[data-side=left]{right:calc(100% + 10px);top:50%;translate:0 -50%}
+  .tip[data-side=right]{left:calc(100% + 10px);top:50%;translate:0 -50%}
+  @keyframes sc-tip{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:scale(1)}}
+  .panel.pop{animation:sc-tip .12s ease-out}
+  @media (prefers-reduced-motion:reduce){.bar,.bar *,.panel{transition:none!important;animation:none!important}}
+  .irow{display:flex;align-items:flex-start;gap:6px;width:100%;text-align:left;background:none;border:0;border-top:1px solid color-mix(in oklab,var(--sc-tag-quiet) 20%,transparent);padding:7px 4px;color:var(--sc-tag-fg);font:inherit}
+  .errc{font-weight:500;color:var(--sc-err);background:var(--sc-err-bg);padding:1px 6px;border-radius:5px}
+  .iact{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 4px 8px 26px}@media (max-width:359px){.iact{padding-left:4px}}
+  .iact .grow{flex:1}
+  .scores{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+  .sc{display:inline-flex;align-items:baseline;gap:5px;padding:2px 8px;border-radius:6px;background:var(--sc-surface-hover);font-variant-numeric:tabular-nums}
+  .sc b{font-weight:600;color:var(--sc-text-1)}
+  .sc .up{color:var(--sc-ok);font-weight:500}.sc .down{color:var(--sc-err);font-weight:500}
+  .panel.compact .scores{display:none}
+  .panel label input[type=checkbox]{width:auto;margin:0 2px 0 0;accent-color:var(--sc-blue)}
+  .sysline{display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid var(--sc-border-subtle)}
+  .sysv{flex:1;min-width:0;color:var(--sc-text-1)}
+  .adj{flex:none;font-size:12px;color:var(--sc-text-2);background:var(--sc-surface-hover);padding:1px 6px;border-radius:5px}
+  .sysbox{display:flex;flex-direction:column;gap:16px}
+  /* Actions (Copy all, Copy fix, Re-scan) are filled buttons; a disclosure (Edit) is a quiet text button with a chevron that turns when open. */
+  .disc{flex:none;display:inline-flex;align-items:center;gap:3px;padding:3px 4px 3px 8px;border:0;border-radius:6px;background:none;color:var(--sc-text-2);font:500 12px/1.33 var(--sc-sans)}
+  .disc svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;transition:transform .22s var(--sc-ease-drawer)}
+  .disc[aria-expanded="true"]{color:var(--sc-text-1)}
+  .disc[aria-expanded="true"] svg{transform:rotate(180deg)}
+  .hrow{display:flex;align-items:center;gap:8px}
+  .lbtn.ghost{background:none;color:var(--sc-text-2)}
+  .lbtn:disabled{opacity:.7;cursor:default}
+  .seg{position:relative;display:flex;gap:2px;padding:2px;border-radius:999px;background:var(--sc-surface-hover)}
+  .segbg{position:absolute;top:2px;bottom:2px;left:2px;width:0;border-radius:999px;background:var(--sc-panel-bg);box-shadow:0 1px 2px #00000033,0 0 0 1px var(--sc-border-subtle);transition:left .22s var(--sc-ease-drawer),width .22s var(--sc-ease-drawer)}
+  .seg.init .segbg{transition:none}
+  .seg button{position:relative;z-index:1;display:flex;align-items:center;gap:5px;height:24px;min-width:24px;padding:0 5px;border:0;border-radius:999px;background:none;color:var(--sc-text-2);font:500 12px/1.33 var(--sc-sans);transition:color .15s}
+  .seg button[aria-checked="true"]{color:var(--sc-text-1);padding:0 9px 0 7px}
+  .seg svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .seg .sl{display:none}.seg [aria-checked="true"] .sl{display:inline}
+  .frame.pv{border:1px dashed var(--sc-blue);background:var(--sc-blue-fill)}
+  .frow{display:flex;align-items:flex-start;gap:6px;padding:7px 4px;border-top:1px solid color-mix(in oklab,var(--sc-tag-quiet) 20%,transparent);color:var(--sc-text-2)}
+  .frow .it{flex:1;min-width:0;text-decoration:line-through}
+  .ok{display:inline-grid;place-items:center;flex:none;width:16px;height:16px;border-radius:8px;background:var(--sc-surface-active);color:var(--sc-text-1);font-size:12px;line-height:1}
+  .cpy{width:100%;height:120px;margin-top:6px;padding:8px;border:0;border-radius:8px;resize:vertical;background:var(--sc-surface-hover);color:var(--sc-text-1);font:400 12px/1.4 var(--sc-mono)}
+  .irow[aria-pressed="true"]{background:color-mix(in oklab,var(--sc-blue) 10%,transparent);box-shadow:inset 0 0 0 1.5px var(--sc-blue);border-radius:6px;border-top-color:transparent}
+  .irow[aria-pressed="true"] + .irow{border-top-color:transparent}
+  .irow .it{flex:1 1 0;min-width:10ch}
+  .irow .q{flex:0 1 auto;min-width:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .irow[aria-pressed="true"]{flex-wrap:wrap}
+  .irow[aria-pressed="true"] .q{flex-basis:100%;max-width:none;white-space:normal;overflow-wrap:anywhere;padding-left:24px}
+  .irow .no,.irow .cat{flex:none}
+  .lk{width:8px;height:8px;border-radius:2px;opacity:.35}
+  button[aria-pressed="true"] .lk{opacity:1}
+  .k-grid{background:var(--sc-cyan)}.k-spacing{background:var(--sc-pink)}.k-type{border:1.5px solid var(--sc-cyan);background:none}
+  .k-colour{background:conic-gradient(var(--sc-pink),var(--sc-amber),var(--sc-cyan),var(--sc-blue),var(--sc-pink))}.k-audit{background:var(--sc-amber);border-radius:50%}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--sc-blue);outline-offset:1px}
+  .panel{position:absolute;pointer-events:auto;width:min(340px,calc(100vw - 24px));max-height:min(62vh,540px);overflow:auto;display:flex;flex-direction:column;gap:16px;padding:14px;background:var(--sc-panel-bg);border-radius:13px;box-shadow:var(--sc-panel-shadow);font:400 12px/1.33 var(--sc-sans);color:var(--sc-text-1);-webkit-font-smoothing:antialiased}
+  .panel h4{margin:0 0 8px;display:flex;justify-content:space-between;align-items:baseline;font:500 12px/1.33 var(--sc-sans);color:var(--sc-text-2)}
+  .panel h4 span{text-transform:none;letter-spacing:0;font-weight:500}
+  .row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+  .panel label{display:flex;align-items:center;gap:6px;color:var(--sc-tag-quiet)}
+  .panel input{width:46px;font:inherit;color:var(--sc-tag-fg);background:var(--sc-hover);border:1px solid transparent;border-radius:6px;padding:3px 6px}
+  .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+  .chip{padding:1px 6px;border-radius:6px;background:var(--sc-hover)}
+  .chip .q{margin-left:4px}
+  .swg{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px 10px}
+  .swi{display:flex;align-items:center;gap:6px;min-width:0}
+  .tl{display:grid;grid-template-columns:1fr auto;gap:2px 10px}
+  .note{color:var(--sc-tag-quiet);margin-top:6px}
+  .lbtn{background:var(--sc-hover);border:0;color:var(--sc-tag-fg);padding:3px 8px;border-radius:6px}
+  .ignrow{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:4px 0;border-top:1px solid color-mix(in oklab,var(--sc-tag-quiet) 20%,transparent)}
+  .ignrow span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  
+  @media (hover:hover){
+    .ign:hover{color:var(--sc-tag-fg)}
+    .ib:hover{color:var(--sc-text-1);background:var(--sc-surface-hover);transform:scale(1.05)}
+    .chev:hover{background:none}
+    .irow:hover{background:var(--sc-hover)}
+    .disc:hover{color:var(--sc-text-1);background:var(--sc-surface-hover)}
+    .lbtn.ghost:hover{color:var(--sc-text-1)}
+    .seg button:hover{color:var(--sc-text-1)}
+    .lbtn:hover{color:var(--sc-blue)}
+    .bw:hover .tip{visibility:visible;animation:sc-tip .1s ease-out}
+  }
+  .ib:active{transition:transform 60ms cubic-bezier(0,0,.2,1);transform:scale(.96)}
+  .sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .showall{display:none}.panel.compact .showall{display:inline-flex}
+  .panel.compact > div:not(:first-child){display:none}
+  .panel.compact .irow:not([aria-pressed="true"]),.panel.compact .frow{display:none}
+  .warn{padding:8px 10px;border-radius:8px;background:var(--sc-surface-hover);color:var(--sc-text-1)}
+  .tbrow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+  .tbrow .lbtn[aria-pressed="true"]{background:var(--sc-surface-active);color:var(--sc-text-1);box-shadow:inset 0 0 0 1px var(--sc-text-2)}
+</style>
+  <div class="layer" id="L"></div>
+  <div id="live" class="sr" role="status" aria-live="polite"></div>
+  <div class="panel" id="panel" hidden></div>
+  <div class="bar" id="bar" role="toolbar" aria-label="react-spotcheck" hidden></div>`;
+  const L = root.getElementById('L');
+  const bar = root.getElementById('bar');
+  const panel = root.getElementById('panel');
+  const live = root.getElementById('live');
+  function announce(t) { live.textContent = ''; setTimeout(() => { live.textContent = t; }, 60); }
+
+  /* ---------- helpers ---------- */
+  const mk = (cls, css, txt) => { const d = document.createElement('div'); if (cls) d.className = cls; if (css) for (const k in css) d.style[k] = typeof css[k] === 'number' ? css[k] + 'px' : css[k]; if (txt != null) d.textContent = txt; return d; };
+  const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+  const r1 = v => Math.round(v * 10) / 10;
+  const lhOf = cs => r1(num(cs.lineHeight) || num(cs.fontSize) * 1.2); /* 'normal' -> ~1.2 */
+  const vw = () => window.innerWidth, vh = () => window.innerHeight;
+  const inView = (r, pad = 0) => r.bottom > -pad && r.top < vh() + pad && r.right > -pad && r.left < vw() + pad && r.width + r.height > 0;
+  const hasText = el => { for (const n of el.childNodes) if (n.nodeType === 3 && n.textContent.trim()) return n; return null; };
+  const isDark = () => { const t = document.documentElement.getAttribute('data-theme'); if (t) return t === 'dark'; return matchMedia('(prefers-color-scheme: dark)').matches; };
+  const syncTheme = () => { S.skipFixed = true; host.classList.toggle('dark', isDark()); };
+  syncTheme();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { syncTheme(); rescanSoon(); }, { signal });
+  track(new MutationObserver(() => { syncTheme(); rescanSoon(); })).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+
+  /* React-aware naming via the fiber attached to DOM nodes (dev or prod build). */
+  /* Own keys only (a for-in walks the whole DOM prototype chain), and the key is remembered once found. */
+  let fiberKey = null;
+  function fiberOf(el) {
+    if (fiberKey) return el[fiberKey] || null;
+    for (const k of Object.keys(el)) if (k.startsWith('__reactFiber$')) { fiberKey = k; return el[k]; }
+    return null;
+  }
+  /* Per-scan memo: elements without a fiber of their own (raw HTML inside a component) take their parent's answer. */
+  let compMemo = new Map(), pathMemo = new Map();
+  function compFiber(el) {
+    if (!el || el === document.body || el === document.documentElement) return null;
+    if (compMemo.has(el)) return compMemo.get(el);
+    let f = fiberOf(el), out;
+    if (f) { out = null; while (f) { if (typeof f.type === 'function') { out = f; break; } f = f.return; } }
+    else out = compFiber(el.parentElement);
+    compMemo.set(el, out); return out;
+  }
+  const fname = f => f ? (f.type.displayName || f.type.name || 'Anonymous') : null;
+  function compRoot(f) { let c = f && f.child; while (c) { if (c.stateNode instanceof Element) return c.stateNode; c = c.child; } return null; }
+  function domPath(el) {
+    if (!el || el === APP) return '';
+    if (pathMemo.has(el)) return pathMemo.get(el);
+    let i = 0; for (let x = el.previousElementSibling; x; x = x.previousElementSibling) i++;
+    const pp = domPath(el.parentElement), out = pp ? pp + '.' + i : String(i);
+    pathMemo.set(el, out); return out;
+  }
+  function desc(el) { const c = (el.getAttribute('class') || '').trim().split(/\s+/)[0]; return el.tagName.toLowerCase() + (c ? '.' + c : ''); }
+
+  /* Colour: rgb -> OKLab / OKLCH */
+  /* rgb()/rgba() directly; anything else Chromium may hand back (oklch, lab, color()) via a 1px canvas, clipped to sRGB. */
+  let cvx = null; const colCache = new Map();
+  function parseRGB(s) {
+    const m = /^rgba?\(([^)]+)\)$/.exec((s || '').trim());
+    if (m) { const p = m[1].split(/[\s,\/]+/).filter(Boolean).map(parseFloat); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; }
+    if (!s || !/^(oklch|oklab|lab|lch|color|hsla?|hwb)\(/i.test(s.trim())) return null;
+    if (colCache.has(s)) return colCache.get(s);
+    let out = null;
+    try {
+      if (!cvx) { const c = document.createElement('canvas'); c.width = c.height = 1; cvx = c.getContext('2d', { willReadFrequently: true }); }
+      cvx.clearRect(0, 0, 1, 1); cvx.fillStyle = '#000'; cvx.fillStyle = s; cvx.fillRect(0, 0, 1, 1);
+      const d = cvx.getImageData(0, 0, 1, 1).data; out = { r: d[0], g: d[1], b: d[2], a: Math.round(d[3] / 255 * 100) / 100 };
+    } catch (e) { out = null; }
+    colCache.set(s, out); return out;
+  }
+  function oklab(c) {
+    const lin = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    const r = lin(c.r), g = lin(c.g), b = lin(c.b);
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+  }
+  function fmtOklch(lab) {
+    const C = Math.hypot(lab[1], lab[2]); let H = Math.atan2(lab[2], lab[1]) * 180 / Math.PI; if (H < 0) H += 360;
+    const L = (Math.round(lab[0] * 1000) / 1000).toString();
+    return C < 0.002 ? `oklch(${L} 0 0)` : `oklch(${L} ${(Math.round(C * 1000) / 1000)} ${Math.round(H)})`;
+  }
+  const labDist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const rgbCss = c => `rgb(${c.r} ${c.g} ${c.b})`;
+
+  /* Text metrics for type guides */
+  const mctx = document.createElement('canvas').getContext('2d');
+  const metricCache = {};
+  function metrics(cs) {
+    const font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    if (!metricCache[font]) { mctx.font = font; const m = mctx.measureText('x'); const H = mctx.measureText('H'); metricCache[font] = { asc: m.fontBoundingBoxAscent, xh: m.actualBoundingBoxAscent, cap: H.actualBoundingBoxAscent }; }
+    return metricCache[font];
+  }
+
+  /* ---------- Scan + infer ---------- */
+  function scan() {
+    const recs = []; compMemo = new Map(); pathMemo = new Map();
+    for (const el of APP.querySelectorAll('*')) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+      const f = compFiber(el);
+      recs.push({ el, cs, comp: fname(f), fiber: f, path: domPath(el), text: hasText(el) });
+    }
+    S.recs = recs;
+    const before = new Map(openIssues().map(i => [i.key, i]));
+    const prevScores = S.counts ? scores() : null;
+    infer();
+    runAudit();
+    noteFixed(before, prevScores);
+    if (S.panel) renderPanel();
+    renderBar();
+    schedule();
+  }
+
+  function infer() {
+    /* Spacing */
+    const vals = [];
+    for (const rec of S.recs) {
+      const cs = rec.cs;
+      for (const p of ['Top', 'Right', 'Bottom', 'Left']) { const v = num(cs['padding' + p]); if (v > 0) vals.push({ v, rec, g: 'padding' }); }
+      const ml = num(cs.marginLeft), mr = num(cs.marginRight);
+      const autoX = ml > 0 && Math.abs(ml - mr) < 0.5; /* centred by auto margins */
+      for (const p of ['Top', 'Right', 'Bottom', 'Left']) {
+        if (autoX && (p === 'Left' || p === 'Right')) continue;
+        const v = num(cs['margin' + p]); if (v > 0) vals.push({ v, rec, g: 'margin' });
+      }
+      if (/flex|grid/.test(cs.display)) {
+        const rg = num(cs.rowGap), cg = num(cs.columnGap);
+        if (rg > 0) vals.push({ v: rg, rec, g: 'gap' }); if (cg > 0 && cg !== rg) vals.push({ v: cg, rec, g: 'gap' });
+      }
+    }
+    const total = vals.length || 1;
+    /* Step choice. Prefer 4px, the most common base. Take 8px only when it explains almost everything 4px does;
+       take 2px only when 4px explains too little and 2px explains most. Never fall to 1px. */
+    const shareOf = st => vals.filter(x => Math.abs(x.v / st - Math.round(x.v / st)) < 0.01).length / total;
+    const sh = { 8: shareOf(8), 4: shareOf(4), 2: shareOf(2) };
+    let step = 4;
+    if (vals.length && sh[8] >= sh[4] - 0.03) step = 8;
+    else if (vals.length && sh[4] < 0.6 && sh[2] >= 0.85) step = 2;
+    const share = vals.length ? sh[step] : 1;
+    /* Off-step values used many times: drift that should not become the system, or a deliberate exception to confirm. */
+    const offCounts = {};
+    vals.forEach(x => { if (Math.abs(x.v / step - Math.round(x.v / step)) >= 0.01) { const k = r1(x.v); offCounts[k] = (offCounts[k] || 0) + 1; } });
+    const suspects = Object.entries(offCounts).filter(([, c]) => c >= 10).map(([v, c]) => ({ v: +v, c })).sort((a, b) => b.c - a.c);
+    const scale = {};
+    for (const x of vals) { const k = r1(x.v); scale[k] = (scale[k] || 0) + 1; }
+
+    /* Grid */
+    const tracks = {};
+    for (const rec of S.recs) {
+      if (rec.cs.display !== 'grid') continue;
+      const n = rec.cs.gridTemplateColumns.split(' ').filter(t => /px$/.test(t)).length;
+      if (n > 1) { const t = tracks[n] || (tracks[n] = { n, count: 0, gutter: num(rec.cs.columnGap) }); t.count++; }
+    }
+    const best = Object.values(tracks).sort((a, b) => b.count - a.count || b.n - a.n)[0];
+    let container = null;
+    for (const rec of S.recs) { if (rec.cs.maxWidth !== 'none' && rec.el.getBoundingClientRect().width > vw() * 0.5) { container = rec.el; break; } }
+    const gapVals = vals.filter(x => x.g === 'gap').map(x => x.v);
+    const commonGap = gapVals.sort((a, b) => gapVals.filter(v => v === b).length - gapVals.filter(v => v === a).length)[0] || 24;
+
+    /* Colours */
+    const cols = {};
+    const addCol = (str, rec, prop) => {
+      const c = parseRGB(str); if (!c || c.a < 0.99) return;
+      const k = `${c.r},${c.g},${c.b}`;
+      const e = cols[k] || (cols[k] = { k, c, lab: oklab(c), count: 0, uses: [] });
+      e.count++; e.uses.push({ rec, prop });
+    };
+    for (const rec of S.recs) {
+      if (rec.text) addCol(rec.cs.color, rec, 'text');
+      addCol(rec.cs.backgroundColor, rec, 'bg');
+      if (num(rec.cs.borderTopWidth) > 0) addCol(rec.cs.borderTopColor, rec, 'border');
+    }
+    /* The page background lives on html/body, outside the scanned tree: count it as part of the palette. */
+    for (const bgEl of [document.documentElement, document.body]) {
+      const c = parseRGB(getComputedStyle(bgEl).backgroundColor); if (!c || c.a < 0.99) continue;
+      const k = `${c.r},${c.g},${c.b}`; const e = cols[k] || (cols[k] = { k, c, lab: oklab(c), count: 0, uses: [] }); e.count += 2;
+    }
+    const palette = Object.values(cols).filter(e => e.count >= 2).sort((a, b) => b.count - a.count);
+
+    /* Type */
+    const combos = {}, sizes = {};
+    for (const rec of S.recs) {
+      if (!rec.text) continue;
+      const fs = r1(num(rec.cs.fontSize)), lh = r1(num(rec.cs.lineHeight) || fs * 1.2), fw = rec.cs.fontWeight;
+      const k = `${fs}/${lh} · ${fw}`;
+      combos[k] = (combos[k] || 0) + 1;
+      const s = sizes[fs] || (sizes[fs] = { fs, lh, count: 0 }); s.count++;
+    }
+
+    S.inf = {
+      step, share, scale, total: vals.length, suspects,
+      cols: best ? best.n : 12, gutter: best ? best.gutter : commonGap, gridSource: best ? `from CSS grid (${best.count} container${best.count > 1 ? 's' : ''})` : 'guessed from gaps',
+      container, baseline: step <= 4 ? step * 2 : step,
+      colours: Object.values(cols), palette, combos, sizes
+    };
+    S.tokAll = readTokens();
+    const t = S.tokAll, has = t.space.length >= 3 || t.type.length >= 3 || t.colour.length >= 3 || t.unit > 0;
+    S.tok = has && !S.adjust.noTokens ? t : null;
+  }
+
+  /* Tokens from the page's CSS variables (:root / html, any theme block). Classified by value and name. */
+  /* Browser defaults per tag, read from a blank document, so token mode does not flag what the page never styled. */
+  let uaFrame = null; const uaCache = {};
+  function uaDefault(tag) {
+    if (uaCache[tag]) return uaCache[tag];
+    try {
+      if (!uaFrame) { uaFrame = document.createElement('iframe'); uaFrame.setAttribute('aria-hidden', 'true'); uaFrame.tabIndex = -1; uaFrame.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;left:-9999px'; document.documentElement.append(uaFrame); uaFrame.contentDocument.open(); uaFrame.contentDocument.write('<!doctype html><body></body>'); uaFrame.contentDocument.close(); }
+      const d = uaFrame.contentDocument, el = d.createElement(tag); d.body.append(el); const cs = uaFrame.contentWindow.getComputedStyle(el);
+      const k = v => { const c = parseRGB(v); return c ? `${c.r},${c.g},${c.b}` : ''; };
+      uaCache[tag] = { fs: r1(num(cs.fontSize)), text: k(cs.color), border: k(cs.borderTopColor), bg: k(cs.backgroundColor) }; el.remove();
+    } catch (e) { uaCache[tag] = {}; }
+    return uaCache[tag];
+  }
+  const dropUa = () => { if (uaFrame) { uaFrame.remove(); uaFrame = null; } };
+  function readTokens() {
+    const names = [], seen = new Set();
+    const walk = rules => { for (const r of rules) {
+      if (r.cssRules && !r.selectorText) { try { walk(r.cssRules); } catch (e) { /* skip */ } continue; }
+      if (r.style && /(^|,)\s*(:root|html)\b/.test(r.selectorText || '')) for (const pr of r.style) if (pr.startsWith('--') && !seen.has(pr)) { seen.add(pr); names.push(pr); }
+    } };
+    for (const sh of document.styleSheets) { try { walk(sh.cssRules); } catch (e) { /* cross-origin sheet */ } }
+    const out = { space: [], type: [], colour: [], unit: 0 }; if (!names.length) return out;
+    const probe = document.createElement('div'); probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:-9999px';
+    document.body.append(probe);
+    const rootCs = getComputedStyle(document.documentElement);
+    for (const n of names) {
+      const raw = rootCs.getPropertyValue(n).trim(); if (!raw) continue;
+      if (/^(-?[\d.]+(px|rem|em)|calc\(.*\))$/.test(raw)) {
+        probe.style.paddingLeft = raw; const px = r1(num(getComputedStyle(probe).paddingLeft)); probe.style.paddingLeft = '';
+        if (!(px > 0)) continue;
+        if (n === '--spacing') { out.unit = px; continue; }
+        if (/space|spacing|gap|gutter|inset|pad|margin/i.test(n)) { if (!out.space.some(t => t.px === px)) out.space.push({ name: n, px }); }
+        else if (/font-size|text|fs-|type|heading|display/i.test(n)) { if (!out.type.some(t => t.px === px)) out.type.push({ name: n, px }); }
+      } else if (window.CSS && CSS.supports('color', raw) && !/^(inherit|initial|unset|currentcolor|transparent)$/i.test(raw)) {
+        probe.style.color = raw; const c = parseRGB(getComputedStyle(probe).color); probe.style.color = '';
+        if (!c || c.a < 0.99) continue; const k = `${c.r},${c.g},${c.b}`;
+        if (!out.colour.some(t => t.k === k)) out.colour.push({ name: n, k, c, lab: oklab(c) });
+      }
+    }
+    probe.remove();
+    out.space.sort((a, b) => a.px - b.px); out.type.sort((a, b) => a.px - b.px);
+    return out;
+  }
+  const sys = () => {
+    const i = S.inf, a = S.adjust;
+    return { step: a.step || (S.tok && S.tok.space.length < 3 && S.tok.unit) || i.step, cols: a.cols || i.cols, gutter: a.gutter != null ? a.gutter : i.gutter, baseline: a.baseline || i.baseline };
+  };
+
+  function gridBox() {
+    const c = S.inf && S.inf.container; if (!c || !c.isConnected) return null;
+    const r = c.getBoundingClientRect(), cs = getComputedStyle(c);
+    const left = r.left + num(cs.paddingLeft) + num(cs.borderLeftWidth), right = r.right - num(cs.paddingRight) - num(cs.borderRightWidth);
+    const s = sys(), w = right - left, colW = (w - s.gutter * (s.cols - 1)) / s.cols;
+    const starts = Array.from({ length: s.cols }, (_, i) => left + i * (colW + s.gutter));
+    return { left, right, w, colW, starts, margin: left - r.left };
+  }
+
+  /* ---------- Audit ---------- */
+  function runAudit() {
+    const s = sys(), inf = S.inf, issues = [];
+    const add = (type, rec, detail, text, extra) => {
+      if (rec.el.closest('[data-spotcheck-ignore]')) return;
+      const key = [type, rec.comp, rec.path, detail].join('|');
+      if (issues.some(i => i.key === key)) return;
+      issues.push({ type, rec, key, detail, text, extra: extra || {} });
+    };
+    /* Checked against the page's tokens when it has them, otherwise against the inferred system. */
+    const T = S.tok;
+    const spTok = T && T.space.length >= 3 ? T.space : null, tyTok = T && T.type.length >= 3 ? T.type : null, coTok = T && T.colour.length >= 3 ? T.colour : null;
+    const unitTok = !!(T && !spTok && T.unit && !S.adjust.step);
+    const nearTok = (list, v) => list.reduce((bst, t) => { const d1 = Math.abs(t.px - v), d0 = Math.abs(bst.px - v); return d1 < d0 || (d1 === d0 && t.px > bst.px) ? t : bst; });
+    /* spacing */
+    const near = v => { const lo = Math.floor(v / s.step) * s.step, hi = lo + s.step; if (v - lo < hi - v) return lo; if (v - lo > hi - v) return hi; return (inf.scale[hi] || 0) > (inf.scale[lo] || 0) ? hi : lo; };
+    const spVals = new Set(), tyVals = new Set();
+    /* the body's own size is part of the type system even when no token names it (Tailwind v4 only emits the tokens a page uses) */
+    const bodyFs = r1(num(getComputedStyle(document.body).fontSize));
+    for (const rec of S.recs) {
+      const cs = rec.cs, seen = {};
+      const chk = (v, g) => {
+        if (v <= 0 || seen[g + v]) return;
+        spVals.add(r1(v));
+        if (spTok) {
+          if (spTok.some(t => Math.abs(t.px - v) < 0.5)) return;
+          seen[g + v] = 1; const t = nearTok(spTok, v);
+          add('spacing', rec, g + ':' + v, `${g} ${r1(v)}px is not a spacing token → use ${t.name} (${t.px}px)`, { short: `${g} ${r1(v)} → ${t.px}`, tok: t.name, val: r1(v), pen: Math.min(1, 0.5 + Math.abs(v - t.px) / 8), fix: { group: g, from: v, to: t.px } });
+          return;
+        }
+        if (Math.abs(v / s.step - Math.round(v / s.step)) < 0.01) return;
+        seen[g + v] = 1; const to = near(v);
+        add('spacing', rec, g + ':' + v, `${g} ${r1(v)}px is off the ${s.step}px scale${unitTok ? ' (--spacing)' : ''} → use ${to}px`, { short: `${g} ${r1(v)} → ${to}`, val: r1(v), pen: Math.min(1, 0.5 + Math.abs(v - to) / s.step), fix: { group: g, from: v, to } });
+      };
+      for (const p of ['Top', 'Right', 'Bottom', 'Left']) chk(num(cs['padding' + p]), 'padding');
+      const ml = num(cs.marginLeft), mr = num(cs.marginRight), autoX = ml > 0 && Math.abs(ml - mr) < 0.5;
+      for (const p of ['Top', 'Right', 'Bottom', 'Left']) { if (autoX && (p === 'Left' || p === 'Right')) continue; chk(num(cs['margin' + p]), 'margin'); }
+      if (/flex|grid/.test(cs.display)) { chk(num(cs.rowGap), 'gap'); chk(num(cs.columnGap), 'gap'); }
+    }
+    /* type */
+    const est = Object.values(inf.sizes).filter(x => x.count >= 2);
+    
+    for (const rec of S.recs) {
+      if (!rec.text) continue;
+      const fs = r1(num(rec.cs.fontSize)); tyVals.add(fs);
+      if (tyTok) {
+        if (tyTok.some(t => Math.abs(t.px - fs) < 0.5) || Math.abs(bodyFs - fs) < 0.5) continue;
+        if (uaDefault(rec.el.localName).fs === fs && fs !== r1(num(getComputedStyle(rec.el.parentElement || rec.el).fontSize))) continue;
+        const t = nearTok(tyTok.some(x => Math.abs(x.px - bodyFs) < 0.5) ? tyTok : tyTok.concat({ name: 'the body size', px: bodyFs }), fs), lh = (inf.sizes[t.px] || {}).lh;
+        add('type', rec, 'size:' + fs, `font ${fs}/${lhOf(rec.cs)} is not a type token → use ${t.name} (${t.px}px)`, { short: `${fs} → ${t.px}`, tok: t.name, val: fs, fix: { props: Object.assign({ 'font-size': t.px + 'px' }, lh ? { 'line-height': lh + 'px' } : {}) } });
+        continue;
+      }
+      if ((inf.sizes[fs] || {}).count >= 2) continue;
+      const m = est.filter(x => Math.abs(x.fs - fs) > 0 && Math.abs(x.fs - fs) <= 2).sort((x, y) => Math.abs(x.fs - fs) - Math.abs(y.fs - fs) || y.fs - x.fs)[0];
+      if (m) add('type', rec, 'size:' + fs, `font ${fs}/${lhOf(rec.cs)} is off the type scale → use ${m.fs}/${m.lh}`, { short: `${fs}/${lhOf(rec.cs)} → ${m.fs}/${m.lh}`, val: fs, fix: { props: { 'font-size': m.fs + 'px', 'line-height': m.lh + 'px' } } });
+    }
+    /* colour */
+    const role = { bg: 'background', text: 'text colour', border: 'border colour' }, cssProp = { bg: 'background-color', text: 'color', border: 'border-color' }, shortOf = { bg: 'bg', text: 'text', border: 'border' };
+    const nCol = inf.colours.length;
+    if (coTok) {
+      /* any colour that is not a token; and uses of a chromatic token that nearly duplicates a more-used token */
+      const used = k => (inf.colours.find(e => e.k === k) || { count: 0 }).count;
+      const chroma = l => Math.hypot(l[1], l[2]);
+      const dupOf = {};
+      for (const x of coTok) for (const y of coTok) {
+        if (x === y || x.k === y.k || chroma(x.lab) < 0.05 || labDist(x.lab, y.lab) >= 0.03 || used(x.k) >= used(y.k)) continue;
+        if (!dupOf[x.k] || labDist(x.lab, y.lab) < labDist(x.lab, dupOf[x.k].lab)) dupOf[x.k] = y;
+      }
+      for (const e of inf.colours) for (const u of e.uses) {
+        const exact = coTok.find(t => t.k === e.k);
+        if (exact && !dupOf[e.k]) continue;
+        if (!exact && uaDefault(u.rec.el.localName)[u.prop] === e.k) continue;
+        const target = exact ? dupOf[e.k] : coTok.reduce((bst, t) => labDist(t.lab, e.lab) < labDist(bst.lab, e.lab) ? t : bst);
+        const text = exact ? `${role[u.prop]} uses ${exact.name}, a near-duplicate of ${target.name} → use ${target.name}` : `${role[u.prop]} ${fmtOklch(e.lab)} is not a colour token → use ${target.name}`;
+        add('colour', u.rec, u.prop + ':' + e.k, text, { sw: [rgbCss(e.c), rgbCss(target.c)], short: shortOf[u.prop], tok: target.name, val: e.k, fix: { props: { [cssProp[u.prop]]: `var(${target.name})` } } });
+      }
+    } else {
+      for (const e of inf.colours) {
+        if (e.count !== 1) continue;
+        let bestP = null, bd = 1;
+        for (const pl of inf.palette) { const d = labDist(e.lab, pl.lab); if (d < bd) { bd = d; bestP = pl; } }
+        if (bestP && bd < 0.06) { const u = e.uses[0]; add('colour', u.rec, u.prop + ':' + e.k, `${role[u.prop]} ${fmtOklch(e.lab)} is a near-duplicate of a palette colour → use ${fmtOklch(bestP.lab)}`, { sw: [rgbCss(e.c), rgbCss(bestP.c)], short: shortOf[u.prop], val: e.k, fix: { props: { [cssProp[u.prop]]: rgbCss(bestP.c) } } }); }
+      }
+    }
+    /* grid: block-level edges that sit just off a column start */
+    const gb = gridBox(); let nGrid = 0;
+    if (gb) {
+      for (const rec of S.recs) {
+        const el = rec.el, par = el.parentElement; if (!par) continue;
+        const pcs = getComputedStyle(par);
+        const isGridItem = pcs.display === 'grid' && pcs.gridTemplateColumns.split(' ').filter(t => /px$/.test(t)).length === s.cols;
+        /* Flow children of block or flex-column parents, but only when the parent's content edge sits on a column. */
+        const flowParent = /^(block|flow-root)$/.test(pcs.display) || (/flex/.test(pcs.display) && /column/.test(pcs.flexDirection));
+        let parentOnCol = false;
+        if (flowParent) { const pr = par.getBoundingClientRect(), pl = pr.left + num(pcs.paddingLeft) + num(pcs.borderLeftWidth); parentOnCol = gb.starts.some(x => Math.abs(x - pl) < 1); }
+        const inFlow = flowParent && parentOnCol && /^(block|flex|grid|flow-root)$/.test(rec.cs.display);
+        if (!isGridItem && !inFlow) continue;
+        const r = el.getBoundingClientRect(); if (r.width < 100 || r.left < gb.left - 12 || r.right > gb.right + 12) continue;
+        nGrid++;
+        let bi = 0, bd = Infinity; gb.starts.forEach((x, i) => { const d = r.left - x; if (Math.abs(d) < Math.abs(bd)) { bd = d; bi = i; } });
+        const d = Math.round(bd * 2) / 2;
+        if (Math.abs(d) >= 1 && Math.abs(d) <= 8) add('grid', rec, 'col', `left edge is ${Math.abs(d)}px ${d > 0 ? 'right' : 'left'} of column ${bi + 1} → align to it`, { short: `${d > 0 ? '+' : '−'}${Math.abs(d)}px · col ${bi + 1}`, fix: { props: { translate: `${-d}px 0` } } });
+      }
+    }
+    /* Number issues in reading order: top to bottom, then left to right within a row (8px tolerance). */
+    const pos = new Map(issues.map(i => { const r = i.rec.el.getBoundingClientRect(); return [i, { y: r.top + window.scrollY, x: r.left + window.scrollX }]; }));
+    issues.sort((a, b) => { const p = pos.get(a), q = pos.get(b); return Math.abs(p.y - q.y) < 8 ? p.x - q.x : p.y - q.y; });
+    dropUa(); S.issues = issues;
+    S.counts = { spacing: spVals.size, grid: nGrid, type: tyVals.size, colour: nCol };
+  }
+  /* keep token names like --space-6 on one line */
+  const tokWrap = h => h.replace(/--[\w-]+/g, m => `<span class="nw">${m}</span>`);
+  const openIssues = () => S.issues.filter(i => !S.ignored.has(i.key));
+  /* 0-100 per check: 100 x (1 - weighted off-system values / distinct values used); grid counts elements. Ignored issues do not count. */
+  function scores() {
+    const c = S.counts || {}, open = openIssues(), out = {};
+    for (const k of ['spacing', 'grid', 'type', 'colour']) {
+      const worst = new Map();
+      for (const i of open) if (i.type === k) { const v = i.extra.val != null ? i.extra.val : i.key, p = i.extra.pen != null ? i.extra.pen : 1; worst.set(v, Math.max(worst.get(v) || 0, p)); }
+      const n = c[k] || 0, pen = [...worst.values()].reduce((a, p) => a + p, 0);
+      /* floor, so 100 means nothing is open */
+      out[k] = n ? Math.max(0, Math.min(100, Math.floor(100 * (1 - pen / n)))) : 100;
+    }
+    return out;
+  }
+
+  /* ---------- Render ---------- */
+  let raf = 0;
+  function schedule() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); }
+
+  function render() {
+    if (S.preview && (!S.active || S.preview.key !== S.selectedKey)) clearPreview();
+    L.replaceChildren();
+    tagSpace = [];
+    S.focused = new Set();
+    if (!S.active) { panel.hidden = true; return; }
+    drawGrid(); /* always on: the grid is the visual signal that react-spotcheck is active */
+    if (S.layers.spacing) drawSpacing();
+    if (S.layers.type) drawType();
+    if (S.layers.colour) drawColour();
+    drawInspect();
+    if (S.selectedKey) drawAudit(); /* only the issue selected in the System panel is shown */
+    const v = mk('tag vp', null, `${vw()}px × ${vh()}px`); L.append(v);
+    placePanel();
+  }
+
+  function drawGrid() {
+    const gb = gridBox(); if (!gb) return;
+    const s = sys();
+    const base = mk('base', { backgroundSize: `100% ${s.baseline}px`, backgroundPosition: `0 ${-(window.scrollY % s.baseline)}px`, left: gb.left, right: vw() - gb.right });
+    L.append(base);
+    for (const x of gb.starts) L.append(mk('col', { left: x, width: gb.colW }));
+    const t = mk('tag sm', { left: gb.left, top: 'calc(8px + env(safe-area-inset-top, 0px))' });
+    t.innerHTML = `<span>${s.cols} col</span><span class="q">${r1(gb.colW)} · gutter ${s.gutter} · baseline ${s.baseline}</span>`;
+    L.append(t);
+  }
+
+  function band(x, y, w, h, axis, label, margin) {
+    if (w <= 0 || h <= 0) return;
+    if (!inView({ left: x, top: y, right: x + w, bottom: y + h, width: w, height: h })) return;
+    L.append(mk('band ' + axis + (margin ? ' m' : ''), { left: x, top: y, width: w, height: h }));
+    const room = axis === 'x' ? w : h;
+    if (label != null && room >= 16) L.append(mk('bl', { left: x + w / 2, top: y + h / 2 }, String(label)));
+  }
+
+  function drawSpacing() {
+    for (const rec of S.recs) {
+      const cs = rec.cs, el = rec.el;
+      if (/flex|grid/.test(cs.display)) {
+        const rg = num(cs.rowGap), cg = num(cs.columnGap);
+        if (rg > 0 || cg > 0) {
+          const kids = [...el.children].map(c => c.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0);
+          for (let i = 0; i < kids.length; i++) for (let j = 0; j < kids.length; j++) {
+            if (i === j) continue;
+            const a = kids[i], b = kids[j];
+            const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top), dx = b.left - a.right;
+            if (cg > 0 && oy > 0 && dx > 0 && Math.abs(dx - cg) < 1.5) band(a.right, Math.max(a.top, b.top), dx, oy, 'x', r1(cg));
+            const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left), dy = b.top - a.bottom;
+            if (rg > 0 && ox > 0 && dy > 0 && Math.abs(dy - rg) < 1.5) band(Math.max(a.left, b.left), a.bottom, ox, dy, 'y', r1(rg));
+          }
+        }
+      }
+      const r = el.getBoundingClientRect();
+      const mt = num(cs.marginTop), mb = num(cs.marginBottom);
+      if (mt > 0) band(r.left, r.top - mt, r.width, mt, 'y', r1(mt), true);
+      if (mb > 0) band(r.left, r.bottom, r.width, mb, 'y', r1(mb), true);
+    }
+  }
+
+  function overlaps(a, list, pad = 2) { return list.some(b => a.left < b.right + pad && a.right + pad > b.left && a.top < b.bottom + pad && a.bottom + pad > b.top); }
+
+  let tagSpace = [];
+  function drawType() {
+    const placed = tagSpace;
+    for (const rec of S.recs) {
+      if (!rec.text) continue;
+      const range = document.createRange(); range.selectNodeContents(rec.text);
+      const rects = range.getClientRects(); if (!rects.length) continue;
+      const fr = rects[0]; if (!inView(fr)) continue;
+      const m = metrics(rec.cs), baseY = fr.top + m.asc;
+      let right = fr.right; for (const q of rects) if (Math.abs(q.top - fr.top) < 2) right = Math.max(right, q.right);
+      L.append(mk('gl', { left: fr.left - 4, top: baseY, width: right - fr.left + 8 }));
+      L.append(mk('gl x', { left: fr.left - 4, top: baseY - m.xh, width: right - fr.left + 8 }));
+      const t = mk('tag sm', { left: fr.left, top: fr.top - 20 });
+      t.innerHTML = `<span>${r1(num(rec.cs.fontSize))}/${lhOf(rec.cs)}</span><span class="q">${rec.cs.fontWeight}</span>`;
+      L.append(t);
+      const tr = t.getBoundingClientRect();
+      if (overlaps(tr, placed)) t.remove(); else placed.push(tr);
+    }
+  }
+
+  function effBg(el) { for (let e = el; e; e = e.parentElement) { const c = parseRGB(getComputedStyle(e).backgroundColor); if (c && c.a > 0.99) return c; } return parseRGB(getComputedStyle(document.body).backgroundColor); }
+  function drawColour() {
+    const placed = tagSpace;
+    const put = (x, y, c, alignRight) => {
+      const t = mk('tag sm', { left: x, top: y });
+      t.innerHTML = `<span class="sw" style="background:${rgbCss(c)}"></span><span>${fmtOklch(oklab(c))}</span>`;
+      L.append(t);
+      let tr = t.getBoundingClientRect();
+      if (alignRight) { t.style.left = (x - tr.width) + 'px'; tr = t.getBoundingClientRect(); }
+      if (tr.left < 4) { t.style.left = '4px'; tr = t.getBoundingClientRect(); }
+      if (overlaps(tr, placed)) t.remove(); else placed.push(tr);
+    };
+    for (const rec of S.recs) {
+      const r = rec.el.getBoundingClientRect(); if (!inView(r)) continue;
+      const bg = parseRGB(rec.cs.backgroundColor);
+      if (bg && bg.a > 0.99 && rec.el.parentElement) {
+        const pb = effBg(rec.el.parentElement);
+        if (!pb || pb.r !== bg.r || pb.g !== bg.g || pb.b !== bg.b) put(r.right - 6, r.top + 6, bg, true);
+      }
+      if (rec.text) { const c = parseRGB(rec.cs.color); if (c) { const lab = oklab(c); if (Math.hypot(lab[1], lab[2]) > 0.05) put(r.left, r.bottom + 4, c); } }
+    }
+  }
+
+  function frame(r, pin) {
+    const f = mk('frame' + (pin ? ' pin' : ''), { left: r.left, top: r.top, width: r.width, height: r.height });
+    L.append(f);
+    for (const [x, y] of [[r.left, r.top], [r.right, r.top], [r.left, r.bottom], [r.right, r.bottom]]) L.append(mk('hd', { left: x - 3.5, top: y - 3.5 }));
+  }
+  function boxBands(el, only) {
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    const bt = num(cs.borderTopWidth), bl = num(cs.borderLeftWidth), br = num(cs.borderRightWidth), bb = num(cs.borderBottomWidth);
+    const pt = num(cs.paddingTop), pr = num(cs.paddingRight), pb = num(cs.paddingBottom), pl = num(cs.paddingLeft);
+    const ix = r.left + bl, iy = r.top + bt, iw = r.width - bl - br, ih = r.height - bt - bb;
+    if (only !== 'margin') {
+      band(ix, iy, iw, pt, 'y', pt ? r1(pt) : null); band(ix, iy + ih - pb, iw, pb, 'y', pb ? r1(pb) : null);
+      band(ix, iy + pt, pl, ih - pt - pb, 'x', pl ? r1(pl) : null); band(ix + iw - pr, iy + pt, pr, ih - pt - pb, 'x', pr ? r1(pr) : null);
+    }
+    if (only === 'padding') return;
+    const ml = num(cs.marginLeft), mr = num(cs.marginRight), autoX = ml > 0 && Math.abs(ml - mr) < 0.5;
+    const mt = num(cs.marginTop), mb = num(cs.marginBottom);
+    if (mt > 0) band(r.left, r.top - mt, r.width, mt, 'y', r1(mt), true);
+    if (mb > 0) band(r.left, r.bottom, r.width, mb, 'y', r1(mb), true);
+    if (!autoX) { if (ml > 0) band(r.left - ml, r.top, ml, r.height, 'x', r1(ml), true); if (mr > 0) band(r.right, r.top, mr, r.height, 'x', r1(mr), true); }
+  }
+  function nameTag(el, r, prefix) {
+    const f = compFiber(el), n = fname(f);
+    const t = mk('tag sm', { left: r.left, top: r.top - 22 });
+    t.innerHTML = `${prefix || ''}<span>${n || desc(el)}</span>${n ? `<span class="q">${desc(el)}</span>` : ''}<span class="q">${r1(r.width)} × ${r1(r.height)}</span>`;
+    L.append(t);
+    if (r.top - 22 < 4) t.style.top = (r.bottom + 4) + 'px';
+    return f;
+  }
+  function measureLine(x1, y1, x2, y2, label) {
+    if (y1 === y2) { L.append(mk('ms', { left: Math.min(x1, x2), top: y1, width: Math.abs(x2 - x1), height: 1 })); L.append(mk('ms', { left: x1, top: y1 - 4, width: 1, height: 9 })); L.append(mk('ms', { left: x2, top: y1 - 4, width: 1, height: 9 })); }
+    else { L.append(mk('ms', { left: x1, top: Math.min(y1, y2), width: 1, height: Math.abs(y2 - y1) })); L.append(mk('ms', { left: x1 - 4, top: y1, width: 9, height: 1 })); L.append(mk('ms', { left: x1 - 4, top: y2, width: 9, height: 1 })); }
+    L.append(mk('ml', { left: (x1 + x2) / 2, top: (y1 + y2) / 2 }, String(r1(label))));
+  }
+  function measure(a, b) {
+    const inside = (p, q) => q.left >= p.left && q.right <= p.right && q.top >= p.top && q.bottom <= p.bottom;
+    if (inside(a, b) || inside(b, a)) {
+      const o = inside(a, b) ? a : b, i = o === a ? b : a, cx = i.left + i.width / 2, cy = i.top + i.height / 2;
+      if (i.top - o.top > 0) measureLine(cx, o.top, cx, i.top, i.top - o.top);
+      if (o.bottom - i.bottom > 0) measureLine(cx, i.bottom, cx, o.bottom, o.bottom - i.bottom);
+      if (i.left - o.left > 0) measureLine(o.left, cy, i.left, cy, i.left - o.left);
+      if (o.right - i.right > 0) measureLine(i.right, cy, o.right, cy, o.right - i.right);
+      return;
+    }
+    const oy0 = Math.max(a.top, b.top), oy1 = Math.min(a.bottom, b.bottom), ox0 = Math.max(a.left, b.left), ox1 = Math.min(a.right, b.right);
+    const ym = oy1 > oy0 ? (oy0 + oy1) / 2 : (a.top + a.height / 2 + b.top + b.height / 2) / 2;
+    const xm = ox1 > ox0 ? (ox0 + ox1) / 2 : (a.left + a.width / 2 + b.left + b.width / 2) / 2;
+    if (b.left >= a.right) measureLine(a.right, ym, b.left, ym, b.left - a.right);
+    else if (a.left >= b.right) measureLine(b.right, ym, a.left, ym, a.left - b.right);
+    if (b.top >= a.bottom) measureLine(xm, a.bottom, xm, b.top, b.top - a.bottom);
+    else if (a.top >= b.bottom) measureLine(xm, b.bottom, xm, a.top, a.top - b.bottom);
+  }
+  function drawInspect() {
+    S.pins = S.pins.filter(p => p.isConnected);
+    for (const p of S.pins) { const r = p.getBoundingClientRect(); if (inView(r, 40)) { frame(r, true); nameTag(p, r, '<span class="dot" style="background:var(--sc-blue)"></span>'); } }
+    const h = S.hover;
+    if (S.selectedKey && !S.alt) drawFocus();
+    else if (h && h.isConnected && !S.pins.includes(h)) {
+      const r = h.getBoundingClientRect();
+      const f = compFiber(h), croot = compRoot(f);
+      if (croot && croot !== h && croot.contains(h)) {
+        const cr = croot.getBoundingClientRect();
+        L.append(mk('region', { left: cr.left - 3, top: cr.top - 3, width: cr.width + 6, height: cr.height + 6 }));
+        const t = mk('tag sm', { left: cr.right + 3, top: cr.top - 3 }, '<' + fname(f) + '>');
+        L.append(t); const tw = t.getBoundingClientRect().width; t.style.left = (cr.right + 3 - tw) + 'px'; t.style.top = (cr.top - 3 - 20) + 'px';
+      }
+      boxBands(h);
+      frame(r, false);
+      nameTag(h, r);
+      if (S.pins.length) measure(S.pins[S.pins.length - 1].getBoundingClientRect(), r);
+    }
+    if (S.pins.length >= 2 && !(h && !S.pins.includes(h))) measure(S.pins[S.pins.length - 2].getBoundingClientRect(), S.pins[S.pins.length - 1].getBoundingClientRect());
+  }
+
+  /* Audit mode: hover is muted except on flagged elements; hold Option for full inspect. */
+  function gapBands(el, cs) {
+    const rg = num(cs.rowGap), cg = num(cs.columnGap);
+    const kids = [...el.children].map(c => c.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0);
+    for (let i = 0; i < kids.length; i++) for (let j = 0; j < kids.length; j++) {
+      if (i === j) continue;
+      const a = kids[i], b = kids[j];
+      const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top), dx = b.left - a.right;
+      if (cg > 0 && oy > 0 && dx > 0 && Math.abs(dx - cg) < 1.5) band(a.right, Math.max(a.top, b.top), dx, oy, 'x', r1(cg));
+      const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left), dy = b.top - a.bottom;
+      if (rg > 0 && ox > 0 && dy > 0 && Math.abs(dy - rg) < 1.5) band(Math.max(a.left, b.left), a.bottom, ox, dy, 'y', r1(rg));
+    }
+  }
+  function typeGuide(cs, textNode) {
+    if (!textNode) return;
+    const range = document.createRange(); range.selectNodeContents(textNode);
+    const m = metrics(cs);
+    for (const q of range.getClientRects()) {
+      const baseY = q.top + m.asc;
+      L.append(mk('gl', { left: q.left - 4, top: baseY, width: q.width + 8 }));
+      L.append(mk('gl x', { left: q.left - 4, top: baseY - m.xh, width: q.width + 8 }));
+    }
+  }
+  function focusIssues() {
+    return openIssues().filter(i => i.key === S.selectedKey);
+  }
+  function drawFocus() {
+    for (const is of focusIssues()) {
+      const el = is.rec.el; if (!el.isConnected) continue;
+      const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+      S.focused.add(is.key);
+      if (is.type === 'spacing') { const g = is.detail.split(':')[0]; if (g === 'gap') gapBands(el, cs); else boxBands(el, g); }
+      else if (is.type === 'type') typeGuide(cs, is.rec.text);
+      else if (is.type === 'grid') {
+        const gb = gridBox();
+        if (gb) { let x = gb.starts[0]; for (const s of gb.starts) if (Math.abs(s - r.left) < Math.abs(x - r.left)) x = s; L.append(mk('vline', { left: x })); measureLine(x, r.top + 20, r.left, r.top + 20, r.left - x); }
+      }
+      L.append(mk('frame quiet' + (S.preview && S.preview.key === is.key ? ' pv' : ''), { left: r.left, top: r.top, width: r.width, height: r.height }));
+    }
+  }
+  const CATS = { spacing: 'Spacing', type: 'Type', colour: 'Colour', grid: 'Grid' };
+  /* Is a candidate tag box free? Inside the viewport, clear of the panel and toolbar, and over no other page content. */
+  function areaFree(el, box) {
+    if (box.left < 8 || box.right > vw() - 8 || box.top < 8 || box.bottom > vh() - 8) return false;
+    for (const ui of [panel, bar]) {
+      if (ui.hidden) continue;
+      const u = ui.getBoundingClientRect();
+      if (box.left < u.right + 8 && box.right > u.left - 8 && box.top < u.bottom + 8 && box.bottom > u.top - 8) return false;
+    }
+    for (const fx of [0.02, 0.35, 0.65, 0.98]) for (const fy of [0.15, 0.5, 0.85]) {
+      const hit = document.elementFromPoint(box.left + (box.right - box.left) * fx, box.top + (box.bottom - box.top) * fy);
+      if (hit && APP.contains(hit) && hit !== APP && !hit.contains(el) && !el.contains(hit)) return false;
+    }
+    return true;
+  }
+  function drawAudit() {
+    const placed = [];
+    const openList = openIssues();
+    for (const is of openList) {
+      if (is.key !== S.selectedKey) continue;
+      const no = openList.indexOf(is) + 1;
+      const el = is.rec.el; if (!el.isConnected) continue;
+      const r = el.getBoundingClientRect(); if (!inView(r, 60)) continue;
+      /* Layout marker = bare minimum (number + the delta); the full description lives in the System panel. */
+      const t = mk('tag issue');
+      const sw = is.extra.sw || [];
+      t.innerHTML = `<span class="no" aria-label="Issue ${no} of ${openList.length}">${no}</span>${sw.length ? `<span class="sw" style="background:${sw[0]}"></span><span class="q">→</span><span class="sw" style="background:${sw[1]}"></span>` : ''}<span></span>`;
+      t.lastChild.textContent = is.extra.short || is.text;
+      L.append(t);
+      const tw = t.offsetWidth, th = t.offsetHeight, cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      /* Placement order: right, left (when that side is empty), then above; below only when above is off-screen. */
+      const box = (left, top) => ({ left, top, right: left + tw, bottom: top + th });
+      const sideBox = { right: box(r.right + 34, cy - th / 2), left: box(r.left - 34 - tw, cy - th / 2) };
+      let side = ['right', 'left'].find(k => areaFree(el, { left: sideBox[k].left - 30, right: sideBox[k].right, top: sideBox[k].top, bottom: sideBox[k].bottom }) && !overlaps(sideBox[k], placed, 4));
+      if (!side) side = r.top - 30 - th >= 8 ? 'above' : 'below';
+      let tr;
+      if (side === 'right' || side === 'left') {
+        tr = sideBox[side];
+        const bw = Math.min(r.width / 2, 24) + 6;
+        if (side === 'right') {
+          L.append(mk('br r', { left: r.right - bw + 6, top: r.top - 4, width: bw, height: r.height + 8 }));
+          L.append(mk('ld h', { left: r.right + 6, top: cy, width: 16 }));
+          L.append(mk('ring', { left: r.right + 22, top: cy - 4 }));
+        } else {
+          L.append(mk('br l', { left: r.left - 6, top: r.top - 4, width: bw, height: r.height + 8 }));
+          L.append(mk('ld h', { left: r.left - 22, top: cy, width: 16 }));
+          L.append(mk('ring', { left: r.left - 31, top: cy - 4 }));
+        }
+      } else {
+        const bh = Math.min(r.height / 2, 24) + 6;
+        let left = Math.max(8, Math.min(vw() - tw - 8, cx - tw / 2));
+        if (S.panel && !panel.hidden) { const pr = panel.getBoundingClientRect(); if (left + tw > pr.left - 8) left = Math.max(8, pr.left - tw - 8); }
+        if (side === 'above') {
+          let top = r.top - 30 - th; tr = box(left, top);
+          while (overlaps(tr, placed, 4) && top - th - 6 >= 8) { top -= th + 6; tr = box(left, top); }
+          L.append(mk('br t', { left: r.left - 4, top: r.top - 6, width: r.width + 8, height: bh }));
+          L.append(mk('ld', { left: cx, top: top + th + 12, height: r.top - 6 - (top + th + 12) }));
+          L.append(mk('ring', { left: cx - 4, top: top + th + 3 }));
+        } else {
+          let top = r.bottom + 30; tr = box(left, top);
+          while (overlaps(tr, placed, 4)) { top += th + 6; tr = box(left, top); }
+          L.append(mk('br b', { left: r.left - 4, top: r.bottom - bh + 6, width: r.width + 8, height: bh }));
+          L.append(mk('ld', { left: cx, top: r.bottom + 6, height: top - 12 - (r.bottom + 6) }));
+          L.append(mk('ring', { left: cx - 4, top: top - 12 }));
+        }
+      }
+      placed.push(tr);
+      t.style.left = tr.left + 'px'; t.style.top = tr.top + 'px';
+      L.append(t); /* keep tag above its bracket */
+    }
+  }
+
+  /* ---------- Toolbar: react-grab style, docked to a screen edge, collapses to a tab (collapsed = idle) ---------- */
+  const LAYERS = [['spacing', 'Spacing'], ['type', 'Type'], ['colour', 'Colour']];
+  /* Icons: Lucide v1.60.0 (https://lucide.dev): square-square, baseline, pipette, wrench, chevron-right, chevron-down,
+     rotate-ccw, rotate-cw. ISC License, Copyright (c) 2026 Lucide Icons and Contributors. Icons derived from the
+     Feather project are MIT License, Copyright (c) 2013-present Cole Bemis. Full texts ship in the package's LICENSE.
+     Drawn at a 1.5 stroke to match react-grab. */
+  const ICONS = {
+    spacing: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><rect x="8" y="8" width="8" height="8" rx="1" /></svg>',
+    type: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16" /><path d="m6 16 6-12 6 12" /><path d="M8 12h8" /></svg>',
+    colour: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 9-8.414 8.414A2 2 0 0 0 3 18.828v1.344a2 2 0 0 1-.586 1.414A2 2 0 0 1 3.828 21h1.344a2 2 0 0 0 1.414-.586L15 12" /><path d="m18 9 .4.4a1 1 0 1 1-3 3l-3.8-3.8a1 1 0 1 1 3-3l.4.4 3.4-3.4a1 1 0 1 1 3 3z" /><path d="m2 22 .414-.414" /></svg>',
+    system: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" /></svg>',
+    chev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>'
+  };
+  const isVert = e => e === 'left' || e === 'right';
+  const CHEV = { top: [90, -90], bottom: [-90, 90], left: [0, 180], right: [180, 0] }; /* [collapsed, expanded] */
+  const TIP = { bottom: 'top', top: 'bottom', left: 'right', right: 'left' };
+  let dragging = false, dragMoved = false;
+  const sizes = {};
+  function buildBar() {
+    const btn = (attrs, label, icon, extra) => `<span class="bw"><button class="ib" ${attrs} aria-label="${label}">${icon}${extra || ''}</button><span class="tip" role="tooltip">${label}</span></span>`;
+    bar.innerHTML = `<div class="drawer"><div class="dclip"><div class="acts">` +
+      LAYERS.map(([k, l]) => btn(`data-layer="${k}"`, l, ICONS[k])).join('') +
+      btn('id="sysbtn"', 'Issues and system', ICONS.system) +
+      `</div></div></div><button class="ib chev" id="chev">${ICONS.chev}</button>`;
+    bar.querySelectorAll('[data-layer]').forEach(b => b.addEventListener('click', () => { if (dragMoved) return; const k = b.dataset.layer; S.layers[k] = !S.layers[k]; persist(); renderBar(); schedule(); }));
+    root.getElementById('sysbtn').addEventListener('click', () => {
+      if (dragMoved) return;
+      S.panel = !S.panel;
+      if (S.panel) { renderPanel(); panel.classList.remove('pop'); void panel.offsetWidth; panel.classList.add('pop'); } else { S.selectedKey = null; S.fixed = []; }
+      renderBar(); schedule();
+    });
+    root.getElementById('chev').addEventListener('click', () => { if (dragMoved) return; setActive(!S.active); });
+    bindDrag();
+    bar.hidden = false;
+  }
+  function renderBar() {
+    if (!bar.firstChild) return;
+    const n = openIssues().length;
+    if (S.active && S.lastN != null && S.lastN !== n) announce(n ? `${n} open issue${n === 1 ? '' : 's'}` : 'No open issues');
+    S.lastN = S.active ? n : null;
+    bar.dataset.edge = S.edge; bar.dataset.collapsed = String(!S.active);
+    root.querySelector('.drawer').inert = !S.active;
+    bar.querySelectorAll('[data-layer]').forEach(b => b.setAttribute('aria-pressed', String(!!S.layers[b.dataset.layer])));
+    const sb = root.getElementById('sysbtn');
+    sb.setAttribute('aria-pressed', String(S.panel));
+    const label = n ? `Issues (${n}) and system` : 'Issues and system';
+    sb.setAttribute('aria-label', label); sb.nextElementSibling.textContent = label;
+    bar.querySelectorAll('.tip').forEach(t => { t.dataset.side = TIP[S.edge]; });
+    const ch = root.getElementById('chev');
+    ch.setAttribute('aria-label', S.active ? 'Collapse toolbar and turn spotcheck off' : 'Expand toolbar and turn spotcheck on');
+    ch.setAttribute('aria-expanded', String(S.active));
+    ch.title = (S.active ? 'Collapse' : 'Expand') + ' (Option+Shift+G). Shift+arrow keys move the toolbar.';
+    ch.firstChild.style.transform = `rotate(${CHEV[S.edge][S.active ? 1 : 0]}deg)`;
+    layoutBar();
+  }
+  function measureBar(edge, collapsed) {
+    const key = edge + (collapsed ? 'c' : 'e');
+    if (sizes[key]) return sizes[key];
+    const c = bar.cloneNode(true); c.removeAttribute('id'); c.classList.add('measure'); c.dataset.edge = edge; c.dataset.collapsed = String(collapsed);
+    root.append(c); const s = { w: c.offsetWidth, h: c.offsetHeight }; c.remove();
+    return (sizes[key] = s);
+  }
+  function barRect(edge, ratio, collapsed) {
+    const s = measureBar(edge, collapsed), e = measureBar(edge, false), off = collapsed ? 0 : 12, m = 12;
+    if (isVert(edge)) {
+      const c = Math.max(m + e.h / 2, Math.min(vh() - m - e.h / 2, ratio * vh()));
+      return { left: edge === 'left' ? off : vw() - s.w - off, top: c - s.h / 2, w: s.w, h: s.h };
+    }
+    const c = Math.max(m + e.w / 2, Math.min(vw() - m - e.w / 2, ratio * vw()));
+    return { left: c - s.w / 2, top: edge === 'top' ? off : vh() - s.h - off, w: s.w, h: s.h };
+  }
+  function layoutBar() {
+    if (dragging || !bar.firstChild) return;
+    const r = barRect(S.edge, S.ratio, !S.active);
+    bar.style.left = r.left + 'px'; bar.style.top = r.top + 'px';
+  }
+  function moveEdge(edge) {
+    if (S.edge !== edge) { S.edge = edge; S.ratio = edge === 'bottom' ? 0.84 : 0.5; }
+    persist(); renderBar(); schedule(); if (S.panel) renderPanel();
+    announce(`Toolbar moved to the ${edge} edge`);
+  }
+  function bindDrag() {
+    bar.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      const r = bar.getBoundingClientRect(), sx = e.clientX, sy = e.clientY;
+      dragMoved = false;
+      const mv = ev => {
+        const dx = ev.clientX - sx, dy = ev.clientY - sy;
+        if (!dragging && Math.hypot(dx, dy) < 5) return;
+        if (!dragging) { dragging = true; dragMoved = true; bar.classList.add('dragging'); panel.hidden = true; }
+        bar.style.left = (r.left + dx) + 'px'; bar.style.top = (r.top + dy) + 'px';
+      };
+      const up = ev => {
+        window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+        if (!dragging) return;
+        dragging = false;
+        const x = ev.clientX, y = ev.clientY, d = { left: x, right: vw() - x, top: y, bottom: vh() - y };
+        S.edge = Object.keys(d).sort((a, b) => d[a] - d[b])[0];
+        S.ratio = isVert(S.edge) ? y / vh() : x / vw();
+        persist();
+        requestAnimationFrame(() => { bar.classList.remove('dragging'); renderBar(); schedule(); });
+        setTimeout(() => { dragMoved = false; }, 0);
+      };
+      window.addEventListener('pointermove', mv, { signal }); window.addEventListener('pointerup', up, { signal });
+    });
+  }
+
+  /* ---------- System panel ---------- */
+  /* On small screens a selected issue gets a compact panel (its row only), so the panel never sits on the issue. */
+  const isCompact = () => !!S.selectedKey && (vw() < 720 || vh() < 560);
+  function keepVisible() {
+    const is = openIssues().find(i => i.key === S.selectedKey); if (!is || panel.hidden) return;
+    const er = is.rec.el.getBoundingClientRect(), pr = panel.getBoundingClientRect();
+    const hit = er.left < pr.right && er.right > pr.left && er.top < pr.bottom && er.bottom > pr.top; if (!hit) return;
+    if (S.edge === 'bottom' || (S.edge !== 'top' && pr.top > vh() / 2)) window.scrollBy(0, Math.min(er.top - 12, er.bottom - (pr.top - 16)));
+    else window.scrollBy(0, Math.max(er.bottom - vh() + 12, er.top - (pr.bottom + 16)));
+  }
+  function placePanel() {
+    if (!S.panel || !S.active || dragging) { panel.hidden = true; return; }
+    panel.hidden = false;
+    panel.classList.toggle('compact', isCompact());
+    const br = barRect(S.edge, S.ratio, false), g = 8, side = S.edge === 'left' || S.edge === 'right';
+    /* on a side edge the panel sits beside the bar, so it gives up the bar's width on narrow screens */
+    panel.style.width = side ? Math.min(340, vw() - br.w - g - 24) + 'px' : '';
+    const pw = panel.offsetWidth, ph = panel.offsetHeight;
+    let left, top;
+    if (S.edge === 'bottom') { left = br.left + br.w / 2 - pw / 2; top = br.top - ph - g; }
+    else if (S.edge === 'top') { left = br.left + br.w / 2 - pw / 2; top = br.top + br.h + g; }
+    else if (S.edge === 'left') { left = br.left + br.w + g; top = br.top + br.h / 2 - ph / 2; }
+    else { left = br.left - pw - g; top = br.top + br.h / 2 - ph / 2; }
+    /* compact on a side edge: drop to the foot of the screen so the selected element can sit above it */
+    if (side && panel.classList.contains('compact')) top = vh() - ph - 12;
+    left = side ? (S.edge === 'right' ? Math.max(12, left) : Math.min(vw() - pw - 12, left)) : Math.max(12, Math.min(vw() - pw - 12, left)); top = Math.max(12, Math.min(vh() - ph - 12, top));
+    panel.style.left = left + 'px'; panel.style.top = top + 'px';
+    panel.style.transformOrigin = { bottom: 'center bottom', top: 'center top', left: 'left center', right: 'right center' }[S.edge];
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
+  function goTo(key) {
+    const st = panel.scrollTop;
+    clearPreview(); S.fixed = []; S.scoreDelta = null;
+    if (S.selectedKey === key) { S.selectedKey = null; }
+    else {
+      const is = openIssues().find(i => i.key === key); if (!is) return;
+      S.selectedKey = key;
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      is.rec.el.scrollIntoView({ block: 'center', behavior: reduce || isCompact() ? 'auto' : 'smooth' });
+    }
+    renderPanel(); panel.scrollTop = st; placePanel(); keepVisible(); schedule();
+  }
+  /* ---------- Fix flow: preview (Before/After), copy, verify ---------- */
+  const ICON_BEFORE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>';
+  const ICON_AFTER = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>';
+  function previewProps(is) {
+    const f = is.extra.fix; if (!f) return {};
+    if (!f.group) return f.props;
+    const cs = getComputedStyle(is.rec.el), out = {};
+    const props = f.group === 'gap' ? ['row-gap', 'column-gap'] : ['top', 'right', 'bottom', 'left'].map(x => f.group + '-' + x);
+    for (const p of props) if (Math.abs(num(cs.getPropertyValue(p)) - f.from) < 0.01) out[p] = f.to + 'px';
+    return out;
+  }
+  function setPreview(on) {
+    if (!on) { clearPreview(); return; }
+    const is = openIssues().find(i => i.key === S.selectedKey); if (!is || S.preview) return;
+    const el = is.rec.el, props = previewProps(is), prev = {};
+    S.muteMut = true;
+    for (const p in props) { prev[p] = [el.style.getPropertyValue(p), el.style.getPropertyPriority(p)]; el.style.setProperty(p, props[p], 'important'); }
+    queueMicrotask(() => { S.muteMut = false; });
+    S.preview = { key: is.key, el, prev };
+    schedule();
+  }
+  function clearPreview() {
+    const pv = S.preview; if (!pv) return;
+    S.muteMut = true;
+    for (const p in pv.prev) { const [v, pr] = pv.prev[p]; if (v) pv.el.style.setProperty(p, v, pr); else pv.el.style.removeProperty(p); }
+    queueMicrotask(() => { S.muteMut = false; });
+    S.preview = null; schedule();
+  }
+  function srcOf(el) {
+    const f = compFiber(el), d = f && (f._debugSource || (f._debugOwner && f._debugOwner._debugSource));
+    return d && d.fileName ? `${d.fileName.replace(/^.*?\/(src|app|components)\//, '$1/')}:${d.lineNumber}` : null;
+  }
+  function promptSystem() {
+    const s = sys(), T = S.tok, sc = scores(), parts = [];
+    parts.push(T && T.space.length >= 3 ? `spacing tokens ${T.space.map(t => `${t.name} ${t.px}px`).join(', ')}` : T && T.unit && !S.adjust.step ? `multiples of --spacing (${s.step}px)` : `${s.step}px spacing step`);
+    if (T && T.type.length >= 3) parts.push(`type tokens ${T.type.map(t => `${t.name} ${t.px}px`).join(', ')}`);
+    if (T && T.colour.length >= 3) parts.push(`colour tokens ${T.colour.map(t => t.name).join(', ')}`);
+    parts.push(`${s.cols}-column grid with ${s.gutter}px gutter`, `${s.baseline}px baseline`);
+    return `System${T ? ' (from the page\'s CSS variables where available)' : ''}: ${parts.join('; ')}.\nScores: spacing ${sc.spacing}, grid ${sc.grid}, type ${sc.type}, colour ${sc.colour} (out of 100).`;
+  }
+  function fixPrompt(list) {
+    const s = sys(), oi = openIssues();
+    const lines = list.map(i => { const src = srcOf(i.rec.el); return `${oi.indexOf(i) + 1}. [${CATS[i.type]}] ${i.rec.comp || 'Element'} (\`${i.rec.el.tagName.toLowerCase()}${[...i.rec.el.classList].map(c => '.' + c).join('')}\`${src ? ' in ' + src : ''}): ${i.text}.`; });
+    const groups = {};
+    list.forEach(i => { const k = i.type + '|' + (i.extra.short || ''); (groups[k] = groups[k] || []).push(i); });
+    const notes = Object.values(groups).filter(g => g.length > 1).map(g => `- "${g[0].extra.short}" appears in ${g.length} places (${[...new Set(g.map(i => i.rec.comp || desc(i.rec.el)))].join(', ')}). It is likely one shared class or token: fix it there.`);
+    return `Fix ${list.length === 1 ? 'this design-system issue' : 'these design-system issues'} found by react-spotcheck on ${location.pathname}.\n${promptSystem()}\n\n${lines.join('\n')}${notes.length ? '\n\nNotes:\n' + notes.join('\n') : ''}\n`;
+  }
+  async function copyText(text, btn) {
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+      const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px;opacity:0';
+      root.append(ta); ta.select(); try { ok = document.execCommand('copy'); } catch (e2) { ok = false; } ta.remove();
+    }
+    if (!ok) { S.copyFallback = text; renderPanel(); const t = root.getElementById('cpy'); if (t) { t.focus(); t.select(); } return; }
+    const old = btn.textContent; btn.textContent = 'Copied'; btn.disabled = true;
+    setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 1400);
+  }
+  function noteFixed(before, prevScores) {
+    if (S.skipFixed) { S.skipFixed = false; return; }
+    const now = new Set(S.issues.map(i => i.key));
+    const gone = [...before.values()].filter(i => !now.has(i.key) && !S.ignored.has(i.key));
+    if (!gone.length) return;
+    S.fixed = gone.map(i => ({ text: i.text, type: i.type }));
+    if (prevScores) { const now2 = scores(); S.scoreDelta = {}; for (const k in now2) if (now2[k] !== prevScores[k]) S.scoreDelta[k] = now2[k] - prevScores[k]; }
+    const left = S.issues.filter(i => !S.ignored.has(i.key)).length;
+    announce(`${gone.length} fixed. ${left} open.`); S.lastN = left;
+  }
+  function scoreRow() {
+    const sc = scores(), d = S.scoreDelta || {};
+    const tip = { spacing: 'Spacing values on the scale or token list', grid: 'Checked edges that sit on a column', type: 'Text sizes on the type scale or token list', colour: 'Colour uses that are palette colours or tokens' };
+    return `<div class="scores" role="list" aria-label="Scores out of 100">${['spacing', 'grid', 'type', 'colour'].map(k => `<span class="sc" role="listitem" title="${tip[k]}"><span class="q">${CATS[k]}</span><b>${sc[k]}</b>${d[k] ? `<span class="${d[k] > 0 ? 'up' : 'down'}">${d[k] > 0 ? '↑' : '↓'}${Math.abs(d[k])}</span>` : ''}</span>`).join('')}</div>`;
+  }
+  function sysWarn() {
+    const inf = S.inf, s = sys(), out = [];
+    if (!(S.tok && (S.tok.space.length >= 3 || S.tok.unit)) && inf.share < 0.85) out.push(`Low confidence: only ${Math.round(inf.share * 100)}% of spacing values fit the ${s.step}px step.`);
+    for (const x of (S.tok && S.tok.space.length >= 3 ? [] : (inf.suspects || [])).slice(0, 2)) { const alt = [4, 2, 1].find(st => st < s.step && x.v % st === 0) || 1; out.push(`${x.v}px is used ${x.c} times off the ${s.step}px step. If it's deliberate, set the step to ${alt}px under Edit.`); }
+    return out.map(t => `<div class="warn">${esc(t)}</div>`).join('');
+  }
+  function sysSummary() {
+    const s = sys(), inf = S.inf, T = S.tok;
+    const sp = T && T.space.length >= 3 ? `${T.space.length} spacing tokens` : T && T.unit && !S.adjust.step ? `${s.step}px step (--spacing)` : `${s.step}px step`;
+    const ty = T && T.type.length >= 3 ? `${T.type.length} type tokens` : `${Object.keys(inf.sizes).length} sizes`;
+    const co = T && T.colour.length >= 3 ? `${T.colour.length} colour tokens` : `${inf.palette.length} colours`;
+    return `${sp} · ${s.cols} col / ${s.gutter} gutter · ${s.baseline} baseline · ${co} · ${ty}`;
+  }
+  function syncSeg(seg) { const on = seg.querySelector('[aria-checked="true"]'), bg = seg.querySelector('.segbg'); if (on && bg) { bg.style.left = on.offsetLeft + 'px'; bg.style.width = on.offsetWidth + 'px'; } }
+  function renderPanel() {
+    const inf = S.inf, s = sys(), gb = gridBox();
+    const scaleChips = Object.entries(inf.scale).map(([v, c]) => [parseFloat(v), c]).sort((a, b) => a[0] - b[0])
+      .map(([v, c]) => `<span class="chip"${Math.abs(v / s.step - Math.round(v / s.step)) < 0.01 ? '' : ' style="box-shadow:inset 0 0 0 1px var(--sc-text-2)" title="Off the step"'}>${v}<span class="q">×${c}</span></span>`).join('');
+    const pal = inf.palette.map(p => `<div class="swi" title="${p.count} uses"><span class="sw" style="background:${rgbCss(p.c)}"></span><span>${fmtOklch(p.lab)}</span></div>`).join('');
+    const sizes = Object.values(inf.sizes).sort((a, b) => b.fs - a.fs).map(z => `<span>${z.fs}/${z.lh}</span><span class="q">×${z.count}</span>`).join('');
+    const ign = S.issues.filter(i => S.ignored.has(i.key));
+    const conf = Math.round(inf.share * 100);
+    const oi = openIssues();
+    const fixedHtml = (S.fixed || []).map(f => `<div class="frow"><span class="ok" aria-hidden="true">✓</span><span class="cat">${CATS[f.type]}</span><span class="it">${esc(f.text)}</span><span class="q">Fixed</span></div>`).join('');
+    const fallbackHtml = S.copyFallback ? `<div class="note">Your browser blocked the clipboard. Copy the text below.</div><textarea id="cpy" class="cpy" readonly>${esc(S.copyFallback)}</textarea>` : '';
+    const T = S.tokAll || { space: [], type: [], colour: [] }, tokCount = T.space.length + T.type.length + T.colour.length;
+    const tokHtml = `<div><h4>Tokens <span>${tokCount ? `${tokCount} CSS variables on this page` : 'none found on this page'}</span></h4>
+        <label><input type="checkbox" id="sc-tok"${tokCount ? '' : ' disabled'}${S.tok ? ' checked' : ''}> Check against these tokens instead of the inferred system</label>
+        ${tokCount ? `<div class="chips">${[...T.space.map(t => [t.name, t.px + 'px']), ...T.type.map(t => [t.name, t.px + 'px'])].map(([n, v]) => `<span class="chip">${esc(n)}<span class="q">${v}</span></span>`).join('')}${T.colour.map(t => `<span class="chip"><span class="sw" style="background:${rgbCss(t.c)}"></span> ${esc(t.name)}</span>`).join('')}</div>` : '<div class="note">Define spacing, type or colour as CSS variables on :root to check against them.</div>'}</div>`;
+    const issuesHtml = `<div><h4>Issues <span class="hrow">${oi.length ? `<b class="errc">${oi.length} open</b><button class="disc showall" id="showall" title="Show every issue">Show all</button><button class="lbtn" id="copyall" title="Copy every open issue as one fix instruction">Copy all</button>` : 'none open'}</span></h4>${scoreRow()}${fixedHtml}${fallbackHtml}${oi.map((i, n) => `<button class="irow" data-go="${esc(i.key)}" aria-pressed="${i.key === S.selectedKey}" title="${i.key === S.selectedKey ? 'Hide this issue on the page' : 'Show this issue on the page'}"><span class="no">${n + 1}</span><span class="cat">${CATS[i.type]}</span><span class="it">${tokWrap(esc(i.text))}</span><span class="q" title="${esc(i.rec.comp || desc(i.rec.el))}">${esc(i.rec.comp || desc(i.rec.el))}</span></button>${i.key === S.selectedKey ? `<div class="iact"><div class="seg" role="radiogroup" aria-label="Preview the fix on the page"><span class="segbg"></span><button role="radio" aria-checked="${!S.preview}" data-pv="0" title="Show the page as built">${ICON_BEFORE}<span class="sl">Before</span></button><button role="radio" aria-checked="${!!S.preview}" data-pv="1" title="Preview the suggested value on the page">${ICON_AFTER}<span class="sl">After</span></button></div><span class="grow"></span><button class="lbtn" data-copy="${esc(i.key)}" title="Copy this issue as a fix instruction">Copy fix</button><button class="lbtn ghost" data-ign="${esc(i.key)}" title="Hide this issue (saved in this browser)">Ignore</button></div>` : ''}`).join('')}</div>`;
+    panel.innerHTML = `
+      ${issuesHtml}
+      <div><h4>Ignored <span>${ign.length}</span></h4>${ign.length ? ign.map(i => `<div class="ignrow"><span>${esc(i.text)} <span class="q">${esc(i.rec.comp || '')}</span></span><button class="lbtn" data-restore="${esc(i.key)}">Restore</button></div>`).join('') : '<div class="note">Nothing ignored. Select an issue and use Ignore, or add data-spotcheck-ignore in code.</div>'}</div>
+      ${sysWarn()}
+      <div class="sysline"><span class="q">System</span><span class="sysv">${sysSummary()}</span>${Object.keys(S.adjust).length ? '<span class="adj">adjusted</span>' : ''}<button class="disc" id="sysadj" aria-expanded="${!!S.sysOpen}" aria-controls="sysbox" title="Show or hide the system controls">Edit<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button></div>
+      <div class="sysbox" id="sysbox"${S.sysOpen ? '' : ' hidden'}>
+      ${tokHtml}
+      <div class="row"><span class="note" style="margin:0;flex:1">Read from ${S.recs.length} elements. Changes are saved for this page in your browser.</span><button class="lbtn" id="rescan">Re-scan</button></div>
+      <div><h4>Spacing <span>${conf}% of ${inf.total} values on step</span></h4>
+        <div class="row"><label for="sc-step">Step</label><input id="sc-step" type="number" min="1" max="32" value="${s.step}"><span class="q">px</span></div>
+        <div class="chips">${scaleChips}</div></div>
+      <div><h4>Grid <span>${esc(inf.gridSource)}</span></h4>
+        <div class="row"><label for="sc-cols">Columns</label><input id="sc-cols" type="number" min="1" max="24" value="${s.cols}">
+          <label for="sc-gut">Gutter</label><input id="sc-gut" type="number" min="0" max="96" value="${s.gutter}">
+          <label for="sc-base">Baseline</label><input id="sc-base" type="number" min="2" max="48" value="${s.baseline}"></div>
+        <div class="note">${gb ? `Container ${r1(gb.w)}px · column ${r1(gb.colW)}px · margin ${r1(gb.margin)}px` : 'No container with a max-width found.'}</div></div>
+      <div><h4>Colours <span>${inf.palette.length} in palette · ${inf.colours.length - inf.palette.length} one-off</span></h4><div class="swg">${pal}</div></div>
+      <div><h4>Type scale <span>font-size/line-height</span></h4><div class="tl">${sizes}</div></div>
+      ${Object.keys(S.adjust).length ? '<div><button class="lbtn" id="reset">Reset to inferred values</button></div>' : ''}
+      </div>
+      <div class="tbrow" role="group" aria-label="Toolbar position"><span class="q">Toolbar</span>${['bottom', 'right', 'top', 'left'].map(e => `<button class="lbtn" data-edge="${e}" aria-pressed="${S.edge === e}">${e[0].toUpperCase() + e.slice(1)}</button>`).join('')}<span class="q">or Shift+arrow</span></div>`;
+    const bindNum = (id, k) => root.getElementById(id).addEventListener('input', e => { const v = parseFloat(e.target.value); if (isNaN(v) || v < (k === 'gutter' ? 0 : 1)) return; S.adjust[k] = v; persist(); runAudit(); renderBar(); schedule(); const sv = panel.querySelector('.sysv'); if (sv) sv.textContent = sysSummary(); });
+    ['sc-step', 'sc-cols', 'sc-gut', 'sc-base'].forEach(id => root.getElementById(id).addEventListener('change', () => { const st = panel.scrollTop; renderPanel(); panel.scrollTop = st; }));
+    root.getElementById('sysadj').addEventListener('click', e => { S.sysOpen = !S.sysOpen; e.currentTarget.setAttribute('aria-expanded', String(S.sysOpen)); root.getElementById('sysbox').hidden = !S.sysOpen; placePanel(); });
+    bindNum('sc-step', 'step'); bindNum('sc-cols', 'cols'); bindNum('sc-gut', 'gutter'); bindNum('sc-base', 'baseline');
+    root.getElementById('rescan').addEventListener('click', () => { clearPreview(); scan(); });
+    panel.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => goTo(b.dataset.go)));
+    panel.querySelectorAll('[data-edge]').forEach(b => b.addEventListener('click', () => moveEdge(b.dataset.edge)));
+    const tk = root.getElementById('sc-tok'); if (tk) tk.addEventListener('change', () => { const st = panel.scrollTop; if (tk.checked) delete S.adjust.noTokens; else S.adjust.noTokens = true; persist(); clearPreview(); S.selectedKey = null; S.fixed = []; S.scoreDelta = null; infer(); runAudit(); renderPanel(); panel.scrollTop = st; renderBar(); schedule(); announce(tk.checked ? 'Checking against the page tokens' : 'Checking against the inferred system'); });
+    const sa2 = root.getElementById('showall'); if (sa2) sa2.addEventListener('click', () => { if (S.selectedKey) goTo(S.selectedKey); });
+    panel.querySelectorAll('.seg').forEach(seg => {
+      seg.classList.add('init'); syncSeg(seg); requestAnimationFrame(() => seg.classList.remove('init'));
+      seg.querySelectorAll('[data-pv]').forEach(b => b.addEventListener('click', () => {
+        seg.querySelectorAll('[data-pv]').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+        requestAnimationFrame(() => syncSeg(seg));
+        setPreview(b.dataset.pv === '1');
+      }));
+    });
+    panel.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => { const is = openIssues().find(i => i.key === b.dataset.copy); if (is) copyText(fixPrompt([is]), b); }));
+    const ca = root.getElementById('copyall'); if (ca) ca.addEventListener('click', () => copyText(fixPrompt(openIssues()), ca));
+    panel.querySelectorAll('[data-ign]').forEach(b => b.addEventListener('click', () => { clearPreview(); S.copyFallback = null; const st = panel.scrollTop; S.ignored.add(b.dataset.ign); S.selectedKey = null; persist(); runAudit(); renderPanel(); panel.scrollTop = st; renderBar(); schedule(); }));
+    const rs = root.getElementById('reset'); if (rs) rs.addEventListener('click', () => { S.adjust = {}; persist(); runAudit(); renderPanel(); renderBar(); schedule(); });
+    panel.querySelectorAll('[data-restore]').forEach(b => b.addEventListener('click', () => { S.ignored.delete(b.dataset.restore); persist(); renderPanel(); renderBar(); schedule(); }));
+  }
+
+  /* ---------- Activation + input ---------- */
+  function setActive(on) {
+    S.active = on;
+    if (on) scan(); else { S.hover = null; S.panel = false; S.selectedKey = null; }
+    persist(); renderBar(); schedule();
+  }
+  const editable = el => !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  window.addEventListener('keydown', e => {
+    if (HK(e)) {
+      if (editable(document.activeElement) || editable(root.activeElement)) return;
+      e.preventDefault(); setActive(!S.active); return;
+    }
+    if (S.active && e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && /^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Enter)$/.test(e.key)) {
+      if (editable(document.activeElement) || editable(root.activeElement)) return;
+      e.preventDefault(); e.stopPropagation();
+      const ae = document.activeElement;
+      let t = S.hover && S.hover.isConnected ? S.hover : (ae && APP.contains(ae) && ae !== APP ? ae : APP.firstElementChild);
+      if (!t) return;
+      if (e.key === 'Enter') { const i = S.pins.indexOf(t); if (i >= 0) { S.pins.splice(i, 1); announce('Unpinned'); } else { S.pins.push(t); announce('Pinned'); } }
+      else {
+        const next = e.key === 'ArrowUp' ? t.parentElement : e.key === 'ArrowDown' ? t.firstElementChild : e.key === 'ArrowLeft' ? t.previousElementSibling : t.nextElementSibling;
+        if (next && APP.contains(next) && next !== APP) t = next;
+        t.scrollIntoView({ block: 'nearest' });
+        const r = t.getBoundingClientRect(), n = fname(compFiber(t));
+        announce(`${n ? n + ', ' : ''}${desc(t)}, ${Math.round(r.width)} by ${Math.round(r.height)}`);
+      }
+      S.hover = t; schedule(); return;
+    }
+    if (S.active && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && /^Arrow/.test(e.key) && bar.contains(root.activeElement)) {
+      e.preventDefault(); moveEdge({ ArrowUp: 'top', ArrowDown: 'bottom', ArrowLeft: 'left', ArrowRight: 'right' }[e.key]); return;
+    }
+    if (e.key === 'Escape' && S.active) {
+      if (S.selectedKey) { S.selectedKey = null; if (S.panel) renderPanel(); }
+      else if (S.panel) { S.panel = false; renderBar(); } else S.pins = [];
+      schedule();
+    }
+  }, { signal, capture: true });
+  const setAlt = v => { if (S.alt !== v) { S.alt = v; if (S.active) schedule(); } };
+  window.addEventListener('keydown', e => { if (e.key === 'Alt') setAlt(true); }, { signal, capture: true });
+  window.addEventListener('keyup', e => { if (e.key === 'Alt') setAlt(false); }, { signal, capture: true });
+  window.addEventListener('blur', () => setAlt(false), { signal });
+  document.addEventListener('mousemove', e => {
+    if (!S.active) return;
+    setAlt(e.altKey);
+    const t = e.target;
+    const next = t instanceof Element && APP.contains(t) && t !== APP ? t : null;
+    if (next !== S.hover) { S.hover = next; schedule(); }
+  }, { signal, passive: true });
+  let keyMode = false;
+  window.addEventListener('keydown', () => { keyMode = true; }, { signal, capture: true });
+  window.addEventListener('pointerdown', () => { keyMode = false; }, { signal, capture: true });
+  document.addEventListener('focusin', e => {
+    if (!S.active || !keyMode) return;
+    const t = e.target; if (t instanceof Element && APP.contains(t) && t !== APP) { S.hover = t; schedule(); }
+  }, { signal });
+  document.addEventListener('mouseleave', () => { if (S.hover) { S.hover = null; schedule(); } }, { signal });
+  document.addEventListener('mousedown', e => { if (S.active && e.altKey && APP.contains(e.target)) e.preventDefault(); }, { signal, capture: true });
+  document.addEventListener('click', e => {
+    if (!S.active || !e.altKey || !APP.contains(e.target) || e.target === APP) return;
+    e.preventDefault(); e.stopPropagation();
+    const el = e.target, i = S.pins.indexOf(el);
+    if (i >= 0) S.pins.splice(i, 1); else S.pins.push(el);
+    schedule();
+  }, { signal, capture: true });
+  window.addEventListener('scroll', schedule, { signal, passive: true });
+  let rt = 0;
+  function rescanSoon() { if (dead || S.muteMut || S.preview) return; clearTimeout(rt); rt = setTimeout(() => { if (S.active) scan(); }, 200); }
+  window.addEventListener('resize', () => { S.skipFixed = true; layoutBar(); schedule(); rescanSoon(); }, { signal });
+  track(new MutationObserver(rescanSoon)).observe(APP, { childList: true, subtree: true, attributes: true, characterData: true });
+
+  /* Open on load so the first view shows the tool working (grid layer on, per spec). */
+  /* Read-only test hook for automated checks (no effect on the page). */
+  const hook = Object.freeze({
+    issues: () => openIssues().map((i, n) => ({ no: n + 1, type: i.type, text: i.text, short: i.extra.short, comp: i.rec.comp, el: i.rec.el })),
+    system: () => Object.assign({}, sys()),
+    rescan: () => scan()
+  });
+  if (opts.testHook !== false) window.__spotcheck = hook;
+  const boot = () => { if (dead) return; buildBar(); setActive(opts.open != null ? !!opts.open : !saved.collapsed); };
+  (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(boot, 50));
+
+  current = Object.freeze({
+    issues: hook.issues, system: hook.system, rescan: hook.rescan,
+    destroy() {
+      if (dead) return; dead = true;
+      try { clearPreview(); } catch (e) { /* nothing previewed */ }
+      ac.abort(); observers.forEach(o => o.disconnect()); clearTimeout(rt); if (raf) cancelAnimationFrame(raf);
+      try { dropUa(); } catch (e) { /* no frame */ }
+      host.remove();
+      if (window.__spotcheck === hook) delete window.__spotcheck;
+      current = null;
+    }
+  });
+  return current;
+}

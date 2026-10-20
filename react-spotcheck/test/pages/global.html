@@ -1,0 +1,174 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><title>react-spotcheck</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Hanken+Grotesk:wght@400;500;600&family=Instrument+Serif:ital@1&display=swap">
+<style>
+/* Sample prototype ("Northlight") that react-spotcheck inspects.
+   Layout: one 1080px column, 12-col CSS grid sections, 4px spacing step.
+   Seeded on purpose: card padding 23px, CTA gap 18px, lead 15/22,
+   an off-palette button blue and a route panel nudged 3px off column 1. */
+:root {
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --ink: #10151f;
+  --ink-2: #4b5466;
+  --line: #dde2ea;
+  --accent: #2459d6;
+  --accent-alt: #2b62dc;
+  --accent-ink: #ffffff;
+  /* Spacing and type tokens (read by react-spotcheck when present) */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px;
+  --space-8: 32px; --space-12: 48px; --space-16: 64px; --space-24: 96px;
+  --text-xs: 12px; --text-sm: 14px; --text-base: 16px; --text-lg: 20px; --text-2xl: 32px; --text-3xl: 40px; --text-display: 64px;
+  --font-body: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d121d; --surface: #141b29; --ink: #e7ebf3; --ink-2: #9aa3b6; --line: #252e41;
+    --accent: #7b9fff; --accent-alt: #86a8ff; --accent-ink: #0b1020; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d121d; --surface: #141b29; --ink: #e7ebf3; --ink-2: #9aa3b6; --line: #252e41;
+  --accent: #7b9fff; --accent-alt: #86a8ff; --accent-ink: #0b1020; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 24px; }
+h1, h2, h3, p, ul { margin: 0; }
+ul { padding: 0; list-style: none; }
+a { color: inherit; text-decoration: none; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+.wrap { max-width: 1080px; margin: 0 auto; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+
+.nav { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-block: 16px; }
+.logo { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.logo-mark { width: 16px; height: 16px; border-radius: 4px; background: var(--accent); }
+.nav-links { display: flex; gap: 24px; font-size: 14px; line-height: 20px; font-weight: 500; color: var(--ink-2); }
+.nav-links a:hover { color: var(--ink); }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; padding: 12px 20px; border-radius: 999px; font-weight: 500; border: 1px solid transparent; }
+.btn-sm { padding: 8px 16px; font-size: 14px; line-height: 20px; }
+.btn-primary { background: var(--accent); color: var(--accent-ink); }
+.btn-alt { background: var(--accent-alt); }
+.btn-ghost { background: var(--surface); border-color: var(--line); color: var(--ink); }
+
+.hero { display: flex; flex-direction: column; align-items: flex-start; gap: 24px; padding-block: 96px 64px; }
+.eyebrow { font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.hero h1 { font-size: 64px; line-height: 64px; font-weight: 500; letter-spacing: -0.03em; max-width: 13ch; text-wrap: balance; }
+.hero h1 em { font-family: var(--font-serif); font-weight: 400; letter-spacing: -0.01em; }
+.lead { font-size: 15px; line-height: 22px; color: var(--ink-2); max-width: 52ch; }
+.ctas { display: flex; flex-wrap: wrap; gap: 18px; }
+
+#routes { padding-bottom: 64px; }
+.route { position: relative; left: 3px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; padding: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; }
+.route-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.label, .plan-name { font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+.value { font-size: 20px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.section { display: flex; flex-direction: column; gap: 32px; padding-block: 64px; }
+.section-head { display: flex; flex-direction: column; gap: 8px; }
+.section-head h2 { font-size: 32px; line-height: 36px; font-weight: 600; letter-spacing: -0.02em; text-wrap: balance; }
+.section-head p { color: var(--ink-2); }
+.grid12 { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 24px; }
+.card { grid-column: span 4; display: flex; flex-direction: column; gap: 12px; padding: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; }
+.card--b { padding: 23px 24px; }
+.card h3 { font-size: 20px; line-height: 28px; font-weight: 600; }
+.card p { color: var(--ink-2); }
+
+.plan { gap: 16px; }
+.plan--featured { border-color: var(--accent); }
+.price { font-size: 40px; line-height: 44px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.price span { font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0; color: var(--ink-2); }
+.plan ul { display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 20px; color: var(--ink-2); flex: 1; }
+
+.footer-inner { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; padding-block: 32px; border-top: 1px solid var(--line); font-size: 14px; line-height: 20px; color: var(--ink-2); }
+
+@media (max-width: 760px) {
+  .nav-links { display: none; }
+  .hero { padding-block: 64px 48px; }
+  .hero h1 { font-size: 40px; line-height: 44px; }
+  .route { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .card { grid-column: span 12; }
+}
+</style>
+
+<div id="app"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+
+<script>
+/* ---------- Sample prototype (React) ---------- */
+(function () {
+  const h = React.createElement;
+
+  function Nav() {
+    return h('header', { className: 'wrap' },
+      h('div', { className: 'nav' },
+        h('a', { className: 'logo', href: '#top' }, h('span', { className: 'logo-mark', 'aria-hidden': 'true' }), 'Northlight'),
+        h('nav', { className: 'nav-links', 'aria-label': 'Main' },
+          ['Routes', 'Forecasts', 'Tides', 'Pricing'].map(t => h('a', { key: t, href: '#' + t.toLowerCase() }, t))),
+        h('a', { className: 'btn btn-ghost btn-sm', href: '#pricing' }, 'Sign in')));
+  }
+  function CTAGroup() {
+    return h('div', { className: 'ctas' },
+      h('a', { className: 'btn btn-primary', href: '#pricing' }, 'Start free trial'),
+      h('a', { className: 'btn btn-ghost', href: '#routes' }, 'See a sample route'));
+  }
+  function Hero() {
+    return h('section', { className: 'wrap hero', id: 'top' },
+      h('p', { className: 'eyebrow' }, 'Passage planning'),
+      h('h1', null, 'Plan the passage, ', h('em', null, 'not the paperwork.')),
+      h('p', { className: 'lead' }, 'Northlight reads GRIB forecasts, tidal streams and your boat’s polars, then picks a departure window and a route you can brief the crew on in five minutes.'),
+      h(CTAGroup));
+  }
+  function RouteSummary() {
+    const items = [['Route', 'Falmouth → A Coruña'], ['Distance', '412 nm'], ['Departure window', 'Tue 06:00 UTC'], ['Passage time', '3 d 4 h']];
+    return h('div', { className: 'wrap', id: 'routes' },
+      h('div', { className: 'route' },
+        items.map(([k, v]) => h('div', { key: k, className: 'route-item' }, h('span', { className: 'label' }, k), h('span', { className: 'value' }, v)))));
+  }
+  function FeatureCard(props) {
+    return h('article', { className: 'card' + (props.variant ? ' card--' + props.variant : '') }, h('h3', null, props.title), h('p', null, props.body));
+  }
+  function FeatureGrid() {
+    return h('section', { className: 'wrap section', id: 'forecasts' },
+      h('div', { className: 'section-head' }, h('h2', null, 'Built for the night watch'), h('p', null, 'Everything Northlight plans fits on one screen in the cockpit.')),
+      h('div', { className: 'grid12' },
+        h(FeatureCard, { title: 'Weather routing', body: 'Isochrone routing on the latest GFS and ECMWF runs, weighted by your boat’s polars and comfort limits.' }),
+        h(FeatureCard, { title: 'Tidal gates', variant: 'b', body: 'Headlands and races timed to slack water, so the plan never asks you to punch three knots of foul tide.' }),
+        h(FeatureCard, { title: 'Crew briefings', body: 'One page per watch: expected wind, sea state, sail plan and the waypoints that matter.' })));
+  }
+  function PlanCard(p) {
+    return h('article', { className: 'card plan' + (p.featured ? ' plan--featured' : '') },
+      h('p', { className: 'plan-name' }, p.name),
+      h('p', { className: 'price' }, p.price, h('span', null, ' / month')),
+      h('ul', null, p.features.map(f => h('li', { key: f }, f))),
+      h('a', { className: p.featured ? 'btn btn-primary btn-alt' : 'btn btn-ghost', href: '#pricing' }, p.featured ? 'Start 14-day trial' : 'Choose ' + p.name));
+  }
+  function Pricing() {
+    return h('section', { className: 'wrap section', id: 'pricing' },
+      h('div', { className: 'section-head' }, h('h2', null, 'Pricing'), h('p', null, 'Billed monthly in euros. Cancel from the app.')),
+      h('div', { className: 'grid12' },
+        h(PlanCard, { name: 'Coastal', price: '€0', features: ['Day passages under 60 nm', 'Tidal gates for UK and Brittany', 'One boat profile'] }),
+        h(PlanCard, { name: 'Offshore', price: '€12', featured: true, features: ['Unlimited passage length', 'GFS and ECMWF routing', 'Crew briefing exports'] }),
+        h(PlanCard, { name: 'Fleet', price: '€39', features: ['Up to 8 boats', 'Shared route library', 'Skipper handover notes'] })));
+  }
+  function Footer() {
+    return h('footer', { className: 'wrap' },
+      h('div', { className: 'footer-inner' },
+        h('span', null, '© 2026 Northlight Marine · sample prototype'),
+        h('span', null, 'Press ⌥⇧G to inspect it')));
+  }
+  function App() {
+    return h('div', { className: 'site' }, h(Nav), h('main', null, h(Hero), h(RouteSummary), h(FeatureGrid), h(Pricing)), h(Footer));
+  }
+  ReactDOM.createRoot(document.getElementById('app')).render(h(App));
+})();
+</script>
+
+<script src="../../dist/react-spotcheck.global.js" data-root="#app"></script>
+</body></html>
