@@ -49,7 +49,7 @@ The component is marked `"use client"` and renders nothing on the server.
 <script src="https://unpkg.com/react-spotcheck/dist/react-spotcheck.global.js" data-root="#root"></script>
 ```
 
-Add `data-manual` to mount it yourself later with `ReactSpotcheck.init()`.
+Add `data-open` to start it switched on, or `data-manual` to mount it yourself later with `ReactSpotcheck.init()`.
 
 ## Production
 
@@ -59,8 +59,8 @@ Production builds get an empty stub through the `production` export condition (V
 
 | | |
 |---|---|
-| **⌥⇧G** | Turn the overlay on or off. The column and baseline grid is always drawn while it is on. |
-| **Toolbar** | Spacing, Type and Colour layers, and the wrench for issues and the system. Docked on the right by default; drag it to any edge. Collapse it to turn the tool off. |
+| **⌥⇧G** | Turn the overlay on or off. It starts off, as a small tab on the right edge, until you click the tab or press the shortcut; after that it remembers your choice. The column and baseline grid is always drawn while it is on. |
+| **Toolbar** | Spacing, Type and Colour layers, and the wrench for issues and the system. Docked on the right by default; drag it to any edge. Collapse it to turn the tool off. Its colours invert against the page (dark on light pages, light on dark ones) and follow theme switches live. |
 | **Hover** | Specs for any element, labelled with its React component. **⌥-click** pins it. |
 | **Keyboard** | Tab focus inspects; ⌥⇧ + arrows walk the tree; ⌥⇧Enter pins; Shift + arrows move the toolbar. |
 | **Issues** | Numbered in reading order. Select one to see its marker, preview the fix (Before / After), copy it, or ignore it. |
@@ -95,7 +95,7 @@ Each check gets a 0–100 score: the share of distinct values in use that are on
 init({
   root: document.getElementById('root'), // subtree to scan; default document.body
   hotkey: 'alt+shift+g',                 // physical key, so it works on every layout
-  open: true,                            // override the remembered on/off state
+  open: true,                            // start on (default: off until clicked, then remembered)
   testHook: true                         // expose window.__spotcheck (read-only)
 });
 ```

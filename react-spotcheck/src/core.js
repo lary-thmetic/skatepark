@@ -247,11 +247,34 @@ export function init(opts = {}) {
   const vw = () => window.innerWidth, vh = () => window.innerHeight;
   const inView = (r, pad = 0) => r.bottom > -pad && r.top < vh() + pad && r.right > -pad && r.left < vw() + pad && r.width + r.height > 0;
   const hasText = el => { for (const n of el.childNodes) if (n.nodeType === 3 && n.textContent.trim()) return n; return null; };
-  const isDark = () => { const t = document.documentElement.getAttribute('data-theme'); if (t) return t === 'dark'; return matchMedia('(prefers-color-scheme: dark)').matches; };
+  /* Page theme, so the chrome can invert against it: the lightness of what the page actually shows behind the middle
+     and corners of the viewport. Where nothing there is opaque, the canvas shows through: the html or body background
+     (browsers paint body's across the whole canvas), else the browser default for the page's color-scheme. */
+  const isDark = () => {
+    const de = document.documentElement, b = document.body;
+    const opaque = el => { if (!el) return null; const c = parseRGB(getComputedStyle(el).backgroundColor); return c && c.a >= 0.5 ? c : null; };
+    const canvasDark = () => {
+      const c = opaque(de) || opaque(b); if (c) return oklab(c)[0] < 0.5;
+      const cs = getComputedStyle(de).colorScheme || '';
+      return /dark/.test(cs) && (!/light/.test(cs) || matchMedia('(prefers-color-scheme: dark)').matches);
+    };
+    let dark = 0, light = 0;
+    for (const [fx, fy] of [[0.5, 0.5], [0.08, 0.08], [0.92, 0.92], [0.5, 0.15]]) {
+      let v = null;
+      for (const el of document.elementsFromPoint(innerWidth * fx, innerHeight * fy)) {
+        if (el === host || el === de || el === b) continue;
+        const c = opaque(el); if (c) { v = oklab(c)[0] < 0.5; break; }
+      }
+      if (v === null) v = canvasDark();
+      if (v) dark++; else light++;
+    }
+    return dark > light;
+  };
   const syncTheme = () => { S.skipFixed = true; host.classList.toggle('dark', isDark()); };
   syncTheme();
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { syncTheme(); rescanSoon(); }, { signal });
-  track(new MutationObserver(() => { syncTheme(); rescanSoon(); })).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+  const themeMO = track(new MutationObserver(() => { syncTheme(); rescanSoon(); }));
+  for (const el of [document.documentElement, document.body]) if (el) themeMO.observe(el, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
 
   /* React-aware naming via the fiber attached to DOM nodes (dev or prod build). */
   /* Own keys only (a for-in walks the whole DOM prototype chain), and the key is remembered once found. */
@@ -284,11 +307,12 @@ export function init(opts = {}) {
 
   /* Colour: rgb -> OKLab / OKLCH */
   /* rgb()/rgba() directly; anything else Chromium may hand back (oklch, lab, color()) via a 1px canvas, clipped to sRGB. */
-  let cvx = null; const colCache = new Map();
+  var cvx = null, colCache = null; /* var: syncTheme can parse a colour before this line runs */
   function parseRGB(s) {
     const m = /^rgba?\(([^)]+)\)$/.exec((s || '').trim());
     if (m) { const p = m[1].split(/[\s,\/]+/).filter(Boolean).map(parseFloat); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; }
     if (!s || !/^(oklch|oklab|lab|lch|color|hsla?|hwb)\(/i.test(s.trim())) return null;
+    if (!colCache) colCache = new Map();
     if (colCache.has(s)) return colCache.get(s);
     let out = null;
     try {
@@ -325,7 +349,7 @@ export function init(opts = {}) {
 
   /* ---------- Scan + infer ---------- */
   function scan() {
-    const recs = []; compMemo = new Map(); pathMemo = new Map();
+    const recs = []; compMemo = new Map(); pathMemo = new Map(); syncTheme();
     for (const el of APP.querySelectorAll('*')) {
       const r = el.getBoundingClientRect();
       if (r.width === 0 && r.height === 0) continue;
@@ -1284,7 +1308,7 @@ export function init(opts = {}) {
     rescan: () => scan()
   });
   if (opts.testHook !== false) window.__spotcheck = hook;
-  const boot = () => { if (dead) return; buildBar(); setActive(opts.open != null ? !!opts.open : !saved.collapsed); };
+  const boot = () => { if (dead) return; buildBar(); setActive(opts.open != null ? !!opts.open : saved.collapsed === false); };
   (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(boot, 50));
 
   current = Object.freeze({

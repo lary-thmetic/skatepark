@@ -59,13 +59,14 @@ while True:
     new = ','.join(args[:2]) + ',' + opt
     body = body[:op+1] + new + body[cl:]; n += 1; pos = op + 1 + len(new)
 print('listeners with signal:', n)
-body = body.replace("new MutationObserver(", "track(new MutationObserver(")
-rep(".observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });", ").observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });")
+rep("  const themeMO = new MutationObserver(() => { syncTheme(); rescanSoon(); });", "  const themeMO = track(new MutationObserver(() => { syncTheme(); rescanSoon(); }));")
+rep("  new MutationObserver(rescanSoon).observe(APP,", "  track(new MutationObserver(rescanSoon).observe(APP,")
+
 rep(".observe(APP, { childList: true, subtree: true, attributes: true, characterData: true });", ").observe(APP, { childList: true, subtree: true, attributes: true, characterData: true });")
 rep("  function rescanSoon() { if (S.muteMut || S.preview) return;", "  function rescanSoon() { if (dead || S.muteMut || S.preview) return;")
 rep("  window.__spotcheck = Object.freeze({", "  const hook = Object.freeze({")
 rep("    rescan: () => scan()\n  });", "    rescan: () => scan()\n  });\n  if (opts.testHook !== false) window.__spotcheck = hook;")
-rep("  const boot = () => { buildBar(); setActive(!saved.collapsed); };", "  const boot = () => { if (dead) return; buildBar(); setActive(opts.open != null ? !!opts.open : !saved.collapsed); };")
+rep("  const boot = () => { buildBar(); setActive(!saved.collapsed); };", "  const boot = () => { if (dead) return; buildBar(); setActive(opts.open != null ? !!opts.open : saved.collapsed === false); };")
 
 core = f"""/*! react-spotcheck · generated from the prototype by scripts/extract.py; edit the prototype, not this file. */
 /* Lucide icons: ISC, Copyright (c) 2026 Lucide Icons and Contributors; Feather-derived icons: MIT, Copyright (c) 2013-present Cole Bemis. See THIRD_PARTY_NOTICES.md. */

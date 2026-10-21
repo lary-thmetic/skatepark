@@ -5,6 +5,6 @@ function Card({ pad }) { return <div className="card" style={{ padding: pad, mar
 function App() {
   const [on, setOn] = useState(true);
   window.__toggle = () => setOn(v => !v);
-  return <main id="m" style={{ padding: 24 }}><Card pad={23} /><Card pad={24} /><Card pad={24} />{on && <Spotcheck root={document.getElementById('app')} />}</main>;
+  return <main id="m" style={{ padding: 24 }}><Card pad={23} /><Card pad={24} /><Card pad={24} />{on && <Spotcheck root={document.getElementById("app")} open />}</main>;
 }
 createRoot(document.getElementById('app')).render(<StrictMode><App /></StrictMode>);

@@ -283,9 +283,34 @@ function init(opts = {}) {
     return null;
   };
   const isDark = () => {
-    const t = document.documentElement.getAttribute("data-theme");
-    if (t) return t === "dark";
-    return matchMedia("(prefers-color-scheme: dark)").matches;
+    const de = document.documentElement, b = document.body;
+    const opaque = (el) => {
+      if (!el) return null;
+      const c = parseRGB(getComputedStyle(el).backgroundColor);
+      return c && c.a >= 0.5 ? c : null;
+    };
+    const canvasDark = () => {
+      const c = opaque(de) || opaque(b);
+      if (c) return oklab(c)[0] < 0.5;
+      const cs = getComputedStyle(de).colorScheme || "";
+      return /dark/.test(cs) && (!/light/.test(cs) || matchMedia("(prefers-color-scheme: dark)").matches);
+    };
+    let dark = 0, light = 0;
+    for (const [fx, fy] of [[0.5, 0.5], [0.08, 0.08], [0.92, 0.92], [0.5, 0.15]]) {
+      let v = null;
+      for (const el of document.elementsFromPoint(innerWidth * fx, innerHeight * fy)) {
+        if (el === host || el === de || el === b) continue;
+        const c = opaque(el);
+        if (c) {
+          v = oklab(c)[0] < 0.5;
+          break;
+        }
+      }
+      if (v === null) v = canvasDark();
+      if (v) dark++;
+      else light++;
+    }
+    return dark > light;
   };
   const syncTheme = () => {
     S.skipFixed = true;
@@ -296,10 +321,11 @@ function init(opts = {}) {
     syncTheme();
     rescanSoon();
   }, { signal });
-  track(new MutationObserver(() => {
+  const themeMO = track(new MutationObserver(() => {
     syncTheme();
     rescanSoon();
-  })).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class"] });
+  }));
+  for (const el of [document.documentElement, document.body]) if (el) themeMO.observe(el, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
   let fiberKey = null;
   function fiberOf(el) {
     if (fiberKey) return el[fiberKey] || null;
@@ -349,8 +375,7 @@ function init(opts = {}) {
     const c = (el.getAttribute("class") || "").trim().split(/\s+/)[0];
     return el.tagName.toLowerCase() + (c ? "." + c : "");
   }
-  let cvx = null;
-  const colCache = /* @__PURE__ */ new Map();
+  var cvx = null, colCache = null;
   function parseRGB(s) {
     const m = /^rgba?\(([^)]+)\)$/.exec((s || "").trim());
     if (m) {
@@ -358,6 +383,7 @@ function init(opts = {}) {
       return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
     }
     if (!s || !/^(oklch|oklab|lab|lch|color|hsla?|hwb)\(/i.test(s.trim())) return null;
+    if (!colCache) colCache = /* @__PURE__ */ new Map();
     if (colCache.has(s)) return colCache.get(s);
     let out = null;
     try {
@@ -414,6 +440,7 @@ function init(opts = {}) {
     const recs = [];
     compMemo = /* @__PURE__ */ new Map();
     pathMemo = /* @__PURE__ */ new Map();
+    syncTheme();
     for (const el of APP.querySelectorAll("*")) {
       const r = el.getBoundingClientRect();
       if (r.width === 0 && r.height === 0) continue;
@@ -1824,7 +1851,7 @@ ${lines.join("\n")}${notes.length ? "\n\nNotes:\n" + notes.join("\n") : ""}
   const boot = () => {
     if (dead) return;
     buildBar();
-    setActive(opts.open != null ? !!opts.open : !saved.collapsed);
+    setActive(opts.open != null ? !!opts.open : saved.collapsed === false);
   };
   (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(boot, 50));
   current = Object.freeze({
