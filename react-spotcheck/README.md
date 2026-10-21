@@ -115,6 +115,6 @@ The overlay is developed as a single-file prototype (`prototype/react-spotcheck.
 
 ## Licence
 
-Copyright (c) 2026 ABC Labs. All rights reserved: no open-source licence is granted yet, so the code can be viewed and installed for evaluation but not reused or redistributed. A licence will be chosen before 1.0.
+Copyright (c) 2026 lary-thmetic. All rights reserved: no open-source licence is granted yet, so the code can be viewed and installed for evaluation but not reused or redistributed. A licence will be chosen before 1.0.
 
 The bundled icons come from [Lucide](https://lucide.dev) under their own licences (ISC; two Feather-derived icons, MIT); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
