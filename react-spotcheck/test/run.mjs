@@ -21,5 +21,6 @@ const checks = {
   'no page errors': lines['errors'] === '[]'
 };
 for (const [k, v] of Object.entries(checks)) { console.log(`${k}: ${v ? 'ok' : 'FAILED'}`); failed ||= !v; }
+try { console.log(run('grid.cjs').trim()); } catch (e) { console.log(String(e.stdout || e).trim()); failed = true; }
 try { console.log(run('theme.cjs').trim()); } catch (e) { console.log(String(e.stdout || e).trim()); failed = true; }
 process.exit(failed ? 1 : 0);

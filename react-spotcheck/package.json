@@ -1,6 +1,6 @@
 {
   "name": "react-spotcheck",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Dev-only overlay that shows how a React page is built (spacing, grid, type, colour) and flags where it drifts from its own design system or tokens.",
   "license": "UNLICENSED",
   "repository": {

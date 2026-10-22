@@ -510,12 +510,17 @@ function init(opts = {}) {
       }
     }
     const best = Object.values(tracks).sort((a, b) => b.count - a.count || b.n - a.n)[0];
-    let container = null;
+    let container = null, containerGuessed = false;
     for (const rec of S.recs) {
-      if (rec.cs.maxWidth !== "none" && rec.el.getBoundingClientRect().width > vw() * 0.5) {
+      if (/px$/.test(rec.cs.maxWidth) && !/^(IMG|VIDEO|CANVAS|SVG|PICTURE|IFRAME)$/i.test(rec.el.tagName) && rec.el.getBoundingClientRect().width > vw() * 0.5) {
         container = rec.el;
         break;
       }
+    }
+    if (!container) {
+      const wide = (el) => el && el.getBoundingClientRect().width > vw() * 0.5;
+      container = APP === document.body ? [...document.body.children].find((el) => !/^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(el.tagName) && wide(el)) || null : wide(APP) ? APP : null;
+      containerGuessed = !!container;
     }
     const gapVals = vals.filter((x) => x.g === "gap").map((x) => x.v);
     const commonGap = gapVals.sort((a, b) => gapVals.filter((v) => v === b).length - gapVals.filter((v) => v === a).length)[0] || 24;
@@ -560,6 +565,7 @@ function init(opts = {}) {
       gutter: best ? best.gutter : commonGap,
       gridSource: best ? `from CSS grid (${best.count} container${best.count > 1 ? "s" : ""})` : "guessed from gaps",
       container,
+      containerGuessed,
       baseline: step <= 4 ? step * 2 : step,
       colours: Object.values(cols),
       palette,
@@ -1601,7 +1607,7 @@ ${lines.join("\n")}${notes.length ? "\n\nNotes:\n" + notes.join("\n") : ""}
         <div class="row"><label for="sc-cols">Columns</label><input id="sc-cols" type="number" min="1" max="24" value="${s.cols}">
           <label for="sc-gut">Gutter</label><input id="sc-gut" type="number" min="0" max="96" value="${s.gutter}">
           <label for="sc-base">Baseline</label><input id="sc-base" type="number" min="2" max="48" value="${s.baseline}"></div>
-        <div class="note">${gb ? `Container ${r1(gb.w)}px \xB7 column ${r1(gb.colW)}px \xB7 margin ${r1(gb.margin)}px` : "No container with a max-width found."}</div></div>
+        <div class="note">${gb ? `${inf.containerGuessed ? "No max-width container, so the grid spans the app root: " : "Container "}${r1(gb.w)}px \xB7 column ${r1(gb.colW)}px \xB7 margin ${r1(gb.margin)}px` : "Nothing wide enough to lay a grid on."}</div></div>
       <div><h4>Colours <span>${inf.palette.length} in palette \xB7 ${inf.colours.length - inf.palette.length} one-off</span></h4><div class="swg">${pal}</div></div>
       <div><h4>Type scale <span>font-size/line-height</span></h4><div class="tl">${sizes2}</div></div>
       ${Object.keys(S.adjust).length ? '<div><button class="lbtn" id="reset">Reset to inferred values</button></div>' : ""}

@@ -106,7 +106,7 @@ init({
 
 - A development build of React 18 or 19 for component names. It still works without React, labelling elements by tag and class.
 - Reads computed styles in the browser, so it checks what renders, not your source.
-- Grid inference guesses columns from edges and CSS grid tracks; correct it under Edit if needed.
+- Grid inference guesses columns from edges and CSS grid tracks; correct it under Edit if needed. The grid sits on the first container with a pixel max-width; full-width layouts without one get a grid across the app's root element.
 - Not yet supported: W3C design-tokens JSON via `init({ tokens })` (planned for 1.1) and Tailwind v3 config.
 
 ## Development
