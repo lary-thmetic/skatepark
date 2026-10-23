@@ -423,6 +423,13 @@ function init(opts = {}) {
     return C < 2e-3 ? `oklch(${L2} 0 0)` : `oklch(${L2} ${Math.round(C * 1e3) / 1e3} ${Math.round(H)})`;
   }
   const labDist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const sameFamily = (a, b) => {
+    const ca = Math.hypot(a[1], a[2]), cb = Math.hypot(b[1], b[2]), N = 0.01;
+    if (ca < N && cb < N) return true;
+    if (ca < N !== cb < N) return false;
+    const d = Math.abs(Math.atan2(a[2], a[1]) - Math.atan2(b[2], b[1])) * 180 / Math.PI;
+    return Math.min(d, 360 - d) <= 30;
+  };
   const rgbCss = (c) => `rgb(${c.r} ${c.g} ${c.b})`;
   const mctx = document.createElement("canvas").getContext("2d");
   const metricCache = {};
@@ -440,6 +447,7 @@ function init(opts = {}) {
     const recs = [];
     compMemo = /* @__PURE__ */ new Map();
     pathMemo = /* @__PURE__ */ new Map();
+    autoRules = null;
     syncTheme();
     for (const el of APP.querySelectorAll("*")) {
       const r = el.getBoundingClientRect();
@@ -459,6 +467,66 @@ function init(opts = {}) {
     renderBar();
     schedule();
   }
+  let autoRules = null;
+  const SIDES = ["Top", "Right", "Bottom", "Left"];
+  function collectAutoRules() {
+    const out = [];
+    const walk = (rules, active) => {
+      for (const r of rules) {
+        if (r.cssRules && !r.selectorText) {
+          let on = active;
+          if (r.media && r.conditionText !== void 0) {
+            try {
+              on = active && matchMedia(r.conditionText || r.media.mediaText).matches;
+            } catch (e) {
+            }
+          }
+          try {
+            walk(r.cssRules, on);
+          } catch (e) {
+          }
+          continue;
+        }
+        if (!active || !r.style || !r.selectorText) continue;
+        const st = r.style;
+        if (!/auto/.test(st.margin + st.marginLeft + st.marginRight + st.marginTop + st.marginBottom + st.marginInlineStart + st.marginInlineEnd + st.marginBlockStart + st.marginBlockEnd)) continue;
+        const sides = {};
+        for (const p of SIDES) if (st.getPropertyValue("margin-" + p.toLowerCase()) === "auto") sides[p] = 1;
+        for (const [prop, key] of [["margin-inline-start", "is"], ["margin-inline-end", "ie"], ["margin-block-start", "Top"], ["margin-block-end", "Bottom"]]) if (st.getPropertyValue(prop) === "auto") sides[key] = 1;
+        if (Object.keys(sides).length) out.push({ sel: r.selectorText, sides });
+      }
+    };
+    for (const sh of document.styleSheets) {
+      try {
+        walk(sh.cssRules, true);
+      } catch (e) {
+      }
+    }
+    return out;
+  }
+  function autoMargins(rec) {
+    if (rec.autoM) return rec.autoM;
+    const el = rec.el, set = /* @__PURE__ */ new Set(), rtl = rec.cs.direction === "rtl";
+    const addKey = (k) => {
+      if (k === "is") set.add(rtl ? "Right" : "Left");
+      else if (k === "ie") set.add(rtl ? "Left" : "Right");
+      else set.add(k);
+    };
+    if (!autoRules) autoRules = collectAutoRules();
+    for (const r of autoRules) {
+      let m = false;
+      try {
+        m = el.matches(r.sel);
+      } catch (e) {
+      }
+      if (m) Object.keys(r.sides).forEach(addKey);
+    }
+    const is = el.style;
+    for (const p of SIDES) if (is && is.getPropertyValue("margin-" + p.toLowerCase()) === "auto") set.add(p);
+    if (is && is.getPropertyValue("margin-inline-start") === "auto") addKey("is");
+    if (is && is.getPropertyValue("margin-inline-end") === "auto") addKey("ie");
+    return rec.autoM = set;
+  }
   function infer() {
     const vals = [];
     for (const rec of S.recs) {
@@ -467,10 +535,9 @@ function init(opts = {}) {
         const v = num(cs["padding" + p]);
         if (v > 0) vals.push({ v, rec, g: "padding" });
       }
-      const ml = num(cs.marginLeft), mr = num(cs.marginRight);
-      const autoX = ml > 0 && Math.abs(ml - mr) < 0.5;
-      for (const p of ["Top", "Right", "Bottom", "Left"]) {
-        if (autoX && (p === "Left" || p === "Right")) continue;
+      const am = autoMargins(rec);
+      for (const p of SIDES) {
+        if (am.has(p)) continue;
         const v = num(cs["margin" + p]);
         if (v > 0) vals.push({ v, rec, g: "margin" });
       }
@@ -500,16 +567,6 @@ function init(opts = {}) {
       const k = r1(x.v);
       scale[k] = (scale[k] || 0) + 1;
     }
-    const tracks = {};
-    for (const rec of S.recs) {
-      if (rec.cs.display !== "grid") continue;
-      const n = rec.cs.gridTemplateColumns.split(" ").filter((t2) => /px$/.test(t2)).length;
-      if (n > 1) {
-        const t2 = tracks[n] || (tracks[n] = { n, count: 0, gutter: num(rec.cs.columnGap) });
-        t2.count++;
-      }
-    }
-    const best = Object.values(tracks).sort((a, b) => b.count - a.count || b.n - a.n)[0];
     let container = null, containerGuessed = false;
     for (const rec of S.recs) {
       if (/px$/.test(rec.cs.maxWidth) && !/^(IMG|VIDEO|CANVAS|SVG|PICTURE|IFRAME)$/i.test(rec.el.tagName) && rec.el.getBoundingClientRect().width > vw() * 0.5) {
@@ -522,6 +579,20 @@ function init(opts = {}) {
       container = APP === document.body ? [...document.body.children].find((el) => !/^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(el.tagName) && wide(el)) || null : wide(APP) ? APP : null;
       containerGuessed = !!container;
     }
+    const cr = container ? container.getBoundingClientRect() : null, ccs = container ? getComputedStyle(container) : null;
+    const contW = cr ? cr.width - num(ccs.paddingLeft) - num(ccs.paddingRight) : vw();
+    const tracks = {};
+    for (const rec of S.recs) {
+      if (rec.cs.display !== "grid") continue;
+      const tw = rec.cs.gridTemplateColumns.split(" ").filter((t3) => /px$/.test(t3)).map(parseFloat), n = tw.length, gap = num(rec.cs.columnGap);
+      if (n < 2 || n > 24 || gap <= 0 || Math.max(...tw) - Math.min(...tw) > 1) continue;
+      const w = tw.reduce((x, y) => x + y, 0) + gap * (n - 1);
+      if (w < contW * 0.75) continue;
+      const k = n + ":" + gap, t2 = tracks[k] || (tracks[k] = { n, count: 0, gutter: gap, width: 0 });
+      t2.count++;
+      t2.width += w;
+    }
+    const best = Object.values(tracks).sort((a, b) => b.width - a.width || b.n - a.n)[0];
     const gapVals = vals.filter((x) => x.g === "gap").map((x) => x.v);
     const commonGap = gapVals.sort((a, b) => gapVals.filter((v) => v === b).length - gapVals.filter((v) => v === a).length)[0] || 24;
     const cols = {};
@@ -563,7 +634,7 @@ function init(opts = {}) {
       suspects,
       cols: best ? best.n : 12,
       gutter: best ? best.gutter : commonGap,
-      gridSource: best ? `from CSS grid (${best.count} container${best.count > 1 ? "s" : ""})` : "guessed from gaps",
+      gridSource: best ? `from CSS grid (${best.count} container${best.count > 1 ? "s" : ""})` : "no page-wide CSS grid, 12 assumed",
       container,
       containerGuessed,
       baseline: step <= 4 ? step * 2 : step,
@@ -727,9 +798,9 @@ function init(opts = {}) {
         add("spacing", rec, g + ":" + v, `${g} ${r1(v)}px is off the ${s.step}px scale${unitTok ? " (--spacing)" : ""} \u2192 use ${to}px`, { short: `${g} ${r1(v)} \u2192 ${to}`, val: r1(v), pen: Math.min(1, 0.5 + Math.abs(v - to) / s.step), fix: { group: g, from: v, to } });
       };
       for (const p of ["Top", "Right", "Bottom", "Left"]) chk(num(cs["padding" + p]), "padding");
-      const ml = num(cs.marginLeft), mr = num(cs.marginRight), autoX = ml > 0 && Math.abs(ml - mr) < 0.5;
-      for (const p of ["Top", "Right", "Bottom", "Left"]) {
-        if (autoX && (p === "Left" || p === "Right")) continue;
+      const am = autoMargins(rec);
+      for (const p of SIDES) {
+        if (am.has(p)) continue;
         chk(num(cs["margin" + p]), "margin");
       }
       if (/flex|grid/.test(cs.display)) {
@@ -760,14 +831,15 @@ function init(opts = {}) {
       const chroma = (l) => Math.hypot(l[1], l[2]);
       const dupOf = {};
       for (const x of coTok) for (const y of coTok) {
-        if (x === y || x.k === y.k || chroma(x.lab) < 0.05 || labDist(x.lab, y.lab) >= 0.03 || used(x.k) >= used(y.k)) continue;
+        if (x === y || x.k === y.k || chroma(x.lab) < 0.05 || !sameFamily(x.lab, y.lab) || labDist(x.lab, y.lab) >= 0.03 || used(x.k) >= used(y.k)) continue;
         if (!dupOf[x.k] || labDist(x.lab, y.lab) < labDist(x.lab, dupOf[x.k].lab)) dupOf[x.k] = y;
       }
       for (const e of inf.colours) for (const u of e.uses) {
         const exact = coTok.find((t) => t.k === e.k);
         if (exact && !dupOf[e.k]) continue;
         if (!exact && uaDefault(u.rec.el.localName)[u.prop] === e.k) continue;
-        const target = exact ? dupOf[e.k] : coTok.reduce((bst, t) => labDist(t.lab, e.lab) < labDist(bst.lab, e.lab) ? t : bst);
+        const fam = coTok.filter((t) => sameFamily(t.lab, e.lab)), pool = fam.length ? fam : coTok;
+        const target = exact ? dupOf[e.k] : pool.reduce((bst, t) => labDist(t.lab, e.lab) < labDist(bst.lab, e.lab) ? t : bst);
         const text = exact ? `${role[u.prop]} uses ${exact.name}, a near-duplicate of ${target.name} \u2192 use ${target.name}` : `${role[u.prop]} ${fmtOklch(e.lab)} is not a colour token \u2192 use ${target.name}`;
         add("colour", u.rec, u.prop + ":" + e.k, text, { sw: [rgbCss(e.c), rgbCss(target.c)], short: shortOf[u.prop], tok: target.name, val: e.k, fix: { props: { [cssProp[u.prop]]: `var(${target.name})` } } });
       }
@@ -776,6 +848,7 @@ function init(opts = {}) {
         if (e.count !== 1) continue;
         let bestP = null, bd = 1;
         for (const pl of inf.palette) {
+          if (!sameFamily(e.lab, pl.lab)) continue;
           const d = labDist(e.lab, pl.lab);
           if (d < bd) {
             bd = d;
@@ -999,14 +1072,13 @@ function init(opts = {}) {
       band(ix + iw - pr, iy + pt, pr, ih - pt - pb, "x", pr ? r1(pr) : null);
     }
     if (only === "padding") return;
-    const ml = num(cs.marginLeft), mr = num(cs.marginRight), autoX = ml > 0 && Math.abs(ml - mr) < 0.5;
-    const mt = num(cs.marginTop), mb = num(cs.marginBottom);
-    if (mt > 0) band(r.left, r.top - mt, r.width, mt, "y", r1(mt), true);
-    if (mb > 0) band(r.left, r.bottom, r.width, mb, "y", r1(mb), true);
-    if (!autoX) {
-      if (ml > 0) band(r.left - ml, r.top, ml, r.height, "x", r1(ml), true);
-      if (mr > 0) band(r.right, r.top, mr, r.height, "x", r1(mr), true);
-    }
+    const ml = num(cs.marginLeft), mr = num(cs.marginRight), mt = num(cs.marginTop), mb = num(cs.marginBottom);
+    const rec0 = S.recs.find((x) => x.el === el), am = rec0 ? autoMargins(rec0) : autoMargins({ el, cs });
+    const lbl = (side, v) => am.has(side) ? "auto" : r1(v);
+    if (mt > 0) band(r.left, r.top - mt, r.width, mt, "y", lbl("Top", mt), true);
+    if (mb > 0) band(r.left, r.bottom, r.width, mb, "y", lbl("Bottom", mb), true);
+    if (ml > 0) band(r.left - ml, r.top, ml, r.height, "x", lbl("Left", ml), true);
+    if (mr > 0) band(r.right, r.top, mr, r.height, "x", lbl("Right", mr), true);
   }
   function nameTag(el, r, prefix) {
     const f = compFiber(el), n = fname(f);
