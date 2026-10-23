@@ -80,7 +80,7 @@ export function parseHotkey(str) {{
 }}
 
 let current = null;
-const NOOP = Object.freeze({{ destroy() {{}}, issues: () => [], system: () => null, rescan() {{}} }});
+const NOOP = Object.freeze({{ destroy() {{}}, issues: () => [], system: () => null, rescan() {{}}, marked: () => 0, prompt: () => '' }});
 
 /** Mounts the overlay once per page. Calling it again returns the live instance. */
 export function init(opts = {{}}) {{
@@ -91,7 +91,7 @@ export function init(opts = {{}}) {{
   let dead = false;
 {body}
   current = Object.freeze({{
-    issues: hook.issues, system: hook.system, rescan: hook.rescan,
+    issues: hook.issues, system: hook.system, rescan: hook.rescan, marked: hook.marked, prompt: hook.prompt,
     destroy() {{
       if (dead) return; dead = true;
       try {{ clearPreview(); }} catch (e) {{ /* nothing previewed */ }}

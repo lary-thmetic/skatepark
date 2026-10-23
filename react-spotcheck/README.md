@@ -72,6 +72,23 @@ Production builds get an empty stub through the `production` export condition (V
 - **Type:** sizes off the type scale.
 - **Colour:** near-duplicates of palette colours. Only colours of the same family count: a red or amber status tint is never called a near-duplicate of a grey.
 
+### Deliberate values
+
+Some off-scale values are on purpose: a 7px gap that makes a header line up with its neighbour, a 2px optical nudge. Mark them in code so the report keeps to real findings and the reason stays next to the value:
+
+```jsx
+<div className="list-header" data-spotcheck-ignore="gap">        {/* 7px: matches the grid header's 88px */}
+<ChevronRight data-spotcheck-ignore="margin" className="mt-[2px]" />
+```
+
+- With a value, only that element and only the listed checks are skipped: `spacing`, `grid`, `type`, `colour`, or a spacing group, `gap`, `margin` or `padding`. Several can be listed, separated by spaces.
+- Without a value, the element and everything inside it are skipped.
+- Marked values are counted under **Ignored** in the panel, not reported. **Ignore** in the panel does the same for one issue, saved in your browser only.
+
+### Where an issue comes from
+
+Each issue names the component that writes the element's JSX and, in React 18 development builds, the file and line where it is written, such as `src/components/list/CustomerTree.tsx:182`. Library code is skipped, so an icon or a Radix part points at the line in your app that uses it. React 19 no longer exposes source lines, so there only the component is named.
+
 ### Tokens
 
 If the page declares CSS variables on `:root` or `html` (hand-written, or Tailwind v4 `@theme`), they are used instead of the inferred system:

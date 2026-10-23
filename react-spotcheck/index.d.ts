@@ -16,7 +16,10 @@ export interface SpotcheckIssue {
   type: IssueType;
   text: string;
   short?: string;
+  /** Component that wrote the element's JSX. */
   comp: string | null;
+  /** Where that JSX is written, e.g. "src/components/list/CustomerTree.tsx:182" (React 18 dev builds). */
+  src: string | null;
   el: Element;
 }
 
@@ -31,6 +34,10 @@ export interface SpotcheckHandle {
   issues(): SpotcheckIssue[];
   system(): SpotcheckSystem | null;
   rescan(): void;
+  /** How many values are marked as deliberate with data-spotcheck-ignore. */
+  marked(): number;
+  /** The copy-all fix prompt for the open issues. */
+  prompt(): string;
   /** Removes the overlay, its listeners and any previewed style. */
   destroy(): void;
 }

@@ -3,3 +3,5 @@ examples/*/node_modules
 examples/*/dist
 test/shots
 test/pages/strict.bundle.js
+test/pages/author/author.bundle.js
+!test/pages/author/node_modules

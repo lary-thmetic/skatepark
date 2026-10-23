@@ -15,7 +15,7 @@ function parseHotkey(str) {
 var current = null;
 var NOOP = Object.freeze({ destroy() {
 }, issues: () => [], system: () => null, rescan() {
-} });
+}, marked: () => 0, prompt: () => "" });
 function init(opts = {}) {
   if (typeof window === "undefined" || typeof document === "undefined") return NOOP;
   if (current) return current;
@@ -353,7 +353,18 @@ function init(opts = {}) {
     compMemo.set(el, out);
     return out;
   }
-  const fname = (f) => f ? f.type.displayName || f.type.name || "Anonymous" : null;
+  const typeName = (t) => !t || typeof t === "string" ? null : t.displayName || t.name || t.render && (t.render.displayName || t.render.name) || t.type && typeName(t.type) || null;
+  const fname = (f) => f ? typeName(f.type) || "Anonymous" : null;
+  function authorOf(el) {
+    let f = null;
+    for (let e = el; e && !f; e = e.parentElement) f = fiberOf(e);
+    if (!f) return { src: null, owner: null };
+    for (let x = f; x; x = x.return) {
+      const d = x._debugSource;
+      if (d && d.fileName && !/node_modules/.test(d.fileName)) return { src: d, owner: typeName(x._debugOwner && x._debugOwner.type) };
+    }
+    return { src: null, owner: typeName(f._debugOwner && f._debugOwner.type) };
+  }
   function compRoot(f) {
     let c = f && f.child;
     while (c) {
@@ -455,7 +466,8 @@ function init(opts = {}) {
       const cs = getComputedStyle(el);
       if (cs.display === "none" || cs.visibility === "hidden") continue;
       const f = compFiber(el);
-      recs.push({ el, cs, comp: fname(f), fiber: f, path: domPath(el), text: hasText(el) });
+      const au = authorOf(el);
+      recs.push({ el, cs, comp: au.owner || fname(f), fiber: f, path: domPath(el), text: hasText(el) });
     }
     S.recs = recs;
     const before = new Map(openIssues().map((i) => [i.key, i]));
@@ -760,8 +772,21 @@ function init(opts = {}) {
   }
   function runAudit() {
     const s = sys(), inf = S.inf, issues = [];
+    S.marked = 0;
     const add = (type, rec, detail, text, extra) => {
-      if (rec.el.closest("[data-spotcheck-ignore]")) return;
+      const ig = rec.el.closest("[data-spotcheck-ignore]");
+      if (ig) {
+        const v = (ig.getAttribute("data-spotcheck-ignore") || "").trim().toLowerCase();
+        if (!v || v === "true") {
+          S.marked++;
+          return;
+        }
+        const group = String(detail).split(":")[0];
+        if (ig === rec.el && v.split(/[\s,]+/).some((t) => t === type || t === group || t === "color" && type === "colour")) {
+          S.marked++;
+          return;
+        }
+      }
       const key = [type, rec.comp, rec.path, detail].join("|");
       if (issues.some((i) => i.key === key)) return;
       issues.push({ type, rec, key, detail, text, extra: extra || {} });
@@ -1539,8 +1564,8 @@ function init(opts = {}) {
     schedule();
   }
   function srcOf(el) {
-    const f = compFiber(el), d = f && (f._debugSource || f._debugOwner && f._debugOwner._debugSource);
-    return d && d.fileName ? `${d.fileName.replace(/^.*?\/(src|app|components)\//, "$1/")}:${d.lineNumber}` : null;
+    const d = authorOf(el).src;
+    return d && d.fileName ? `${d.fileName.replace(/^.*?\/(src|app)\//, "$1/")}:${d.lineNumber}` : null;
   }
   function promptSystem() {
     const s = sys(), T = S.tok, sc = scores(), parts = [];
@@ -1562,7 +1587,11 @@ Scores: spacing ${sc.spacing}, grid ${S.gridChecked ? sc.grid : "not checked"}, 
       const k = i.type + "|" + (i.extra.short || "");
       (groups[k] = groups[k] || []).push(i);
     });
-    const notes = Object.values(groups).filter((g) => g.length > 1).map((g) => `- "${g[0].extra.short}" appears in ${g.length} places (${[...new Set(g.map((i) => i.rec.comp || desc(i.rec.el)))].join(", ")}). It is likely one shared class or token: fix it there.`);
+    const notes = Object.values(groups).filter((g) => g.length > 1).map((g) => {
+      const srcs = [...new Set(g.map((i) => srcOf(i.rec.el)).filter(Boolean))], comps = [...new Set(g.map((i) => i.rec.comp || desc(i.rec.el)))];
+      if (srcs.length === 1 && comps.length === 1) return `- "${g[0].extra.short}" appears ${g.length} times, all written once in ${comps[0]} (${srcs[0]}), repeated per item: one change there fixes all of them. If the value is deliberate, mark it with data-spotcheck-ignore.`;
+      return `- "${g[0].extra.short}" appears in ${g.length} places (${comps.join(", ")}). It is likely one shared class or token: fix it there.`;
+    });
     return `Fix ${list.length === 1 ? "this design-system issue" : "these design-system issues"} found by react-spotcheck on ${location.pathname}.
 ${promptSystem()}
 
@@ -1668,7 +1697,7 @@ ${lines.join("\n")}${notes.length ? "\n\nNotes:\n" + notes.join("\n") : ""}
     const issuesHtml = `<div><h4>Issues <span class="hrow">${oi.length ? `<b class="errc">${oi.length} open</b><button class="disc showall" id="showall" title="Show every issue">Show all</button><button class="lbtn" id="copyall" title="Copy every open issue as one fix instruction">Copy all</button>` : "none open"}</span></h4>${scoreRow()}${fixedHtml}${fallbackHtml}${oi.map((i, n) => `<button class="irow" data-go="${esc(i.key)}" aria-pressed="${i.key === S.selectedKey}" title="${i.key === S.selectedKey ? "Hide this issue on the page" : "Show this issue on the page"}"><span class="no">${n + 1}</span><span class="cat">${CATS[i.type]}</span><span class="it">${tokWrap(esc(i.text))}</span><span class="q" title="${esc(i.rec.comp || desc(i.rec.el))}">${esc(i.rec.comp || desc(i.rec.el))}</span></button>${i.key === S.selectedKey ? `<div class="iact"><div class="seg" role="radiogroup" aria-label="Preview the fix on the page"><span class="segbg"></span><button role="radio" aria-checked="${!S.preview}" data-pv="0" title="Show the page as built">${ICON_BEFORE}<span class="sl">Before</span></button><button role="radio" aria-checked="${!!S.preview}" data-pv="1" title="Preview the suggested value on the page">${ICON_AFTER}<span class="sl">After</span></button></div><span class="grow"></span><button class="lbtn" data-copy="${esc(i.key)}" title="Copy this issue as a fix instruction">Copy fix</button><button class="lbtn ghost" data-ign="${esc(i.key)}" title="Hide this issue (saved in this browser)">Ignore</button></div>` : ""}`).join("")}</div>`;
     panel.innerHTML = `
       ${issuesHtml}
-      <div><h4>Ignored <span>${ign.length}</span></h4>${ign.length ? ign.map((i) => `<div class="ignrow"><span>${esc(i.text)} <span class="q">${esc(i.rec.comp || "")}</span></span><button class="lbtn" data-restore="${esc(i.key)}">Restore</button></div>`).join("") : '<div class="note">Nothing ignored. Select an issue and use Ignore, or add data-spotcheck-ignore in code.</div>'}</div>
+      <div><h4>Ignored <span>${ign.length}</span></h4>${ign.length ? ign.map((i) => `<div class="ignrow"><span>${esc(i.text)} <span class="q">${esc(i.rec.comp || "")}</span></span><button class="lbtn" data-restore="${esc(i.key)}">Restore</button></div>`).join("") : '<div class="note">Nothing ignored. Select an issue and use Ignore, or add data-spotcheck-ignore in code.</div>'}${S.marked ? `<div class="note">${S.marked} more marked as deliberate in code with data-spotcheck-ignore.</div>` : ""}</div>
       ${sysWarn()}
       <div class="sysline"><span class="q">System</span><span class="sysv">${sysSummary()}</span>${Object.keys(S.adjust).length ? '<span class="adj">adjusted</span>' : ""}<button class="disc" id="sysadj" aria-expanded="${!!S.sysOpen}" aria-controls="sysbox" title="Show or hide the system controls">Edit<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button></div>
       <div class="sysbox" id="sysbox"${S.sysOpen ? "" : " hidden"}>
@@ -1923,7 +1952,9 @@ ${lines.join("\n")}${notes.length ? "\n\nNotes:\n" + notes.join("\n") : ""}
   }, { signal });
   track(new MutationObserver(rescanSoon)).observe(APP, { childList: true, subtree: true, attributes: true, characterData: true });
   const hook = Object.freeze({
-    issues: () => openIssues().map((i, n) => ({ no: n + 1, type: i.type, text: i.text, short: i.extra.short, comp: i.rec.comp, el: i.rec.el })),
+    issues: () => openIssues().map((i, n) => ({ no: n + 1, type: i.type, text: i.text, short: i.extra.short, comp: i.rec.comp, src: srcOf(i.rec.el), el: i.rec.el })),
+    marked: () => S.marked || 0,
+    prompt: () => fixPrompt(openIssues()),
     system: () => Object.assign({}, sys()),
     rescan: () => scan()
   });
@@ -1938,6 +1969,8 @@ ${lines.join("\n")}${notes.length ? "\n\nNotes:\n" + notes.join("\n") : ""}
     issues: hook.issues,
     system: hook.system,
     rescan: hook.rescan,
+    marked: hook.marked,
+    prompt: hook.prompt,
     destroy() {
       if (dead) return;
       dead = true;
