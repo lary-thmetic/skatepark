@@ -632,9 +632,10 @@ function init(opts = {}) {
       scale,
       total: vals.length,
       suspects,
+      gridFound: !!best,
       cols: best ? best.n : 12,
-      gutter: best ? best.gutter : commonGap,
-      gridSource: best ? `from CSS grid (${best.count} container${best.count > 1 ? "s" : ""})` : "no page-wide CSS grid, 12 assumed",
+      gutter: best ? best.gutter : gapVals.find((v) => v >= 12) || 24,
+      gridSource: best ? `from CSS grid (${best.count} container${best.count > 1 ? "s" : ""})` : "no layout grid found: 12 columns drawn as a guide, not checked",
       container,
       containerGuessed,
       baseline: step <= 4 ? step * 2 : step,
@@ -863,7 +864,8 @@ function init(opts = {}) {
     }
     const gb = gridBox();
     let nGrid = 0;
-    if (gb) {
+    S.gridChecked = !!(gb && (inf.gridFound || S.adjust.cols));
+    if (S.gridChecked) {
       for (const rec of S.recs) {
         const el = rec.el, par = el.parentElement;
         if (!par) continue;
@@ -1545,9 +1547,9 @@ function init(opts = {}) {
     parts.push(T && T.space.length >= 3 ? `spacing tokens ${T.space.map((t) => `${t.name} ${t.px}px`).join(", ")}` : T && T.unit && !S.adjust.step ? `multiples of --spacing (${s.step}px)` : `${s.step}px spacing step`);
     if (T && T.type.length >= 3) parts.push(`type tokens ${T.type.map((t) => `${t.name} ${t.px}px`).join(", ")}`);
     if (T && T.colour.length >= 3) parts.push(`colour tokens ${T.colour.map((t) => t.name).join(", ")}`);
-    parts.push(`${s.cols}-column grid with ${s.gutter}px gutter`, `${s.baseline}px baseline`);
+    parts.push(S.gridChecked ? `${s.cols}-column grid with ${s.gutter}px gutter` : "no layout grid (grid not checked)", `${s.baseline}px baseline`);
     return `System${T ? " (from the page's CSS variables where available)" : ""}: ${parts.join("; ")}.
-Scores: spacing ${sc.spacing}, grid ${sc.grid}, type ${sc.type}, colour ${sc.colour} (out of 100).`;
+Scores: spacing ${sc.spacing}, grid ${S.gridChecked ? sc.grid : "not checked"}, type ${sc.type}, colour ${sc.colour} (out of 100).`;
   }
   function fixPrompt(list) {
     const s = sys(), oi = openIssues();
@@ -1624,7 +1626,7 @@ ${lines.join("\n")}${notes.length ? "\n\nNotes:\n" + notes.join("\n") : ""}
   function scoreRow() {
     const sc = scores(), d = S.scoreDelta || {};
     const tip = { spacing: "Spacing values on the scale or token list", grid: "Checked edges that sit on a column", type: "Text sizes on the type scale or token list", colour: "Colour uses that are palette colours or tokens" };
-    return `<div class="scores" role="list" aria-label="Scores out of 100">${["spacing", "grid", "type", "colour"].map((k) => `<span class="sc" role="listitem" title="${tip[k]}"><span class="q">${CATS[k]}</span><b>${sc[k]}</b>${d[k] ? `<span class="${d[k] > 0 ? "up" : "down"}">${d[k] > 0 ? "\u2191" : "\u2193"}${Math.abs(d[k])}</span>` : ""}</span>`).join("")}</div>`;
+    return `<div class="scores" role="list" aria-label="Scores out of 100">${["spacing", "grid", "type", "colour"].map((k) => `<span class="sc" role="listitem" title="${k === "grid" && !S.gridChecked ? "Not checked: no layout grid found. Set the columns under Edit to check it." : tip[k]}"><span class="q">${CATS[k]}</span><b>${k === "grid" && !S.gridChecked ? "\u2013" : sc[k]}</b>${d[k] ? `<span class="${d[k] > 0 ? "up" : "down"}">${d[k] > 0 ? "\u2191" : "\u2193"}${Math.abs(d[k])}</span>` : ""}</span>`).join("")}</div>`;
   }
   function sysWarn() {
     const inf = S.inf, s = sys(), out = [];
